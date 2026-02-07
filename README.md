@@ -10,3 +10,5 @@ An intelligent academic planning system designed to help students optimize their
 
 ## How to Run
 (Instructions will be added as we build the project)
+
+A
