@@ -31,6 +31,20 @@ services:
       - ./server:/app
       - /app/node_modules
 
+  client:
+    build: ./client
+    container_name: eadvisor_frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - server
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    # This is important for Vite to work inside Docker
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      
 # This creates a safe "Storage Bin" for your database data
 volumes:
   mysql_data:

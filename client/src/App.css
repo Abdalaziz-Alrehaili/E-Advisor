@@ -1,0 +1,128 @@
+/* === GLOBALS & THEME === */
+#root {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  /* Removed global text-align center to prevent breaking layouts */
+}
+
+body {
+  background: #f2f8f1 url('assets/hexagon-bg.svg') repeat;
+  font-family: 'IBM Plex Sans Arabic', Arial, Helvetica, sans-serif;
+  color: #104929;
+  min-height: 100vh;
+  margin: 0;
+}
+
+/* === CONTAINERS === */
+.container {
+  border-radius: 20px;
+  background: #fffdfa;
+  box-shadow: 0 0 24px 7px #10492912;
+  padding: 2.5rem 1.6rem;
+  margin-top: 45px;
+  margin-bottom: 45px;
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+  overflow: hidden; /* Prevent scrollbars on profile/login */
+}
+
+/* Specific helper for the Plan page only */
+.plan-page-container {
+  overflow-x: auto !important;
+  max-width: 95vw !important;
+}
+
+/* === LOGIN PAGE SPECIAL === */
+.login-form {
+  max-width: 400px;
+  margin: 5vh auto;
+  padding: 2.5rem;
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(16, 73, 41, 0.1);
+  text-align: center; /* Only center text inside the login card */
+}
+
+/* === FORMS === */
+.form-label {
+  display: block;
+  text-align: left; /* Ensures labels stay above inputs correctly */
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+
+/* === PROFILE STYLES === */
+.profile-img {
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  border: 2.5px solid #1a9044;
+  background: #f2f8f1;
+  margin-bottom: 15px;
+}
+
+.semester-box {
+  background: #ffffff;
+  border-left: 5px solid #1a9044 !important;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+
+/* === THE ROADMAP GRID (KEEPING THIS FOR THE PLAN PAGE) === */
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); 
+  gap: 40px; 
+  padding: 20px 0;
+  text-align: left;
+}
+
+.sem-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.course-card-slim {
+  border: 1.5px solid #b9915e33;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+}
+
+/* === TABLES === */
+.table {
+  width: 100%;
+  text-align: left; /* Keep table data aligned left */
+}
+
+/* === BUTTONS === */
+.btn-success {
+  background: linear-gradient(90deg, #104929 75%, #1a9044 100%);
+  color: #fff;
+  border: none;
+  transition: transform 0.2s;
+}
+.btn-success:hover {
+  transform: translateY(-2px);
+  color: #fff;
+}
+
+/* Force standard layouts back to the left */
+.login-form, .semester-box, .table, .profile-form {
+  text-align: left !important;
+}
+
+/* Ensure table text specifically aligns correctly */
+.table th, .table td {
+  text-align: left !important;
+}
+
+/* But keep headers centered if they ask for it */
+.text-center {
+  text-align: center !important;
+}
