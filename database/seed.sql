@@ -399,7 +399,8 @@ FROM courses c;
 
 -- 1. Years 1-3 Core: Completed (Historical)
 INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
-SELECT 1, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 'A'
+SELECT 1, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
@@ -411,7 +412,8 @@ GROUP BY c.course_id, pr.ideal_year;
 
 -- 2. Year 4 Core: Completed (Excluding Training, which we do manually below)
 INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
-SELECT 1, MIN(s.section_id), c.course_id, 4, 'completed', 'A-'
+SELECT 1, MIN(s.section_id), c.course_id, 4, 'completed', 
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
@@ -424,12 +426,11 @@ GROUP BY c.course_id;
 -- 3. Adam's Manual Adjustments (Ahead of Pace)
 INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade) VALUES 
 -- Summer Training (Finished Summer between Yr 4 and 5)
-(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323') AND semester_id = 12), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323'), 4, 'completed', 'A'),
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323') AND semester_id = 12), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')),
 -- ISLS-401 (Year 5 course taken early in Year 4)
-(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401') AND semester_id = 11), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401'), 4, 'completed', 'A');
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401') AND semester_id = 11), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')),
 -- Adam completed an elective early in Year 4
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade) VALUES 
-(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363') AND semester_id = 11), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363'), 4, 'completed', 'A');
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363') AND semester_id = 11), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'));
 
 -- 4. Adam's CURRENT Semester (Year 5, Semester 1 - ID 13)
 INSERT INTO enrollments (student_id, section_id, course_id, year_number, status) VALUES 
@@ -441,7 +442,8 @@ INSERT INTO enrollments (student_id, section_id, course_id, year_number, status)
 
 -- 1. Completed Year 1 & 2 Perfectly
 INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
-SELECT 2, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 'B'
+SELECT 2, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
@@ -450,7 +452,8 @@ GROUP BY c.course_id, pr.ideal_year;
 
 -- 2. Year 3: He missed CPIS-250, CPIS-222, and BUS-232 (His "Behind Pace" gap)
 INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
-SELECT 2, MIN(s.section_id), c.course_id, 3, 'completed', 'C+'
+SELECT 2, MIN(s.section_id), c.course_id, 3, 'completed', 
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
@@ -469,7 +472,8 @@ INSERT INTO enrollments (student_id, section_id, course_id, year_number, status)
 
 -- 1. Completed Year 1 & 2 perfectly
 INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
-SELECT 3, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 'B+'
+SELECT 3, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
