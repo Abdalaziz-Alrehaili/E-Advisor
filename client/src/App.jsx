@@ -18,14 +18,14 @@ function App() {
       <nav className="navbar navbar-dark shadow-sm mb-4" style={{ backgroundColor: '#104929' }}>
         <div className="container d-flex justify-content-between">
           <div className="d-flex align-items-center gap-3">
-            <span className="navbar-brand h1 mb-0">E-Advisor</span>
+            <Link to="/" className="text-warning text-decoration-none" style={{color: '#000000'}}>E-Advisor </Link>
             {user && (
               <>
                 <Link to="/profile" className="text-white text-decoration-none">Profile</Link>
                 <Link to="/plan" className="text-white text-decoration-none">Plan</Link>
               </>
             )}
-            <Link to="/admin" className="text-warning text-decoration-none" style={{fontSize: '0.8rem'}}>Explorer</Link>
+            <Link to="/admin" className="text-warning text-decoration-none" style={{fontSize: '0.8rem'}}> Explorer</Link>
           </div>
           {user && (
             <div className="d-flex align-items-center gap-3">

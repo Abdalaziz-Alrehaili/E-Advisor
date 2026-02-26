@@ -3,13 +3,21 @@ import { Link } from 'react-router-dom';
 
 function Profile({ user }) {
   const [grades, setGrades] = useState([]);
+  const [draftPlan, setDraftPlan] = useState(null); // NEW: State for the Draft Plan
 
   useEffect(() => {
     if (user && user.user_id) {
+      // Fetch historical grades
       fetch(`http://localhost:5000/my-grades/${user.user_id}`)
         .then(res => res.json())
         .then(data => setGrades(data))
         .catch(err => console.error("Error fetching grades:", err));
+
+      // NEW: Fetch the drafted plan
+      fetch(`http://localhost:5000/my-draft/${user.user_id}`)
+        .then(res => res.json())
+        .then(data => setDraftPlan(data))
+        .catch(err => console.error("Error fetching draft:", err));
     }
   }, [user]);
 
@@ -20,19 +28,23 @@ function Profile({ user }) {
     let totalCredits = 0;
 
     const completed = academicRecords.filter(g => g.grade && gradePoints[g.grade] !== undefined);
-    if (completed.length === 0) return "0.00";
+    
+    if (completed.length === 0) return "N/A";
 
     completed.forEach(record => {
-      const credits = record.credits || 3;
+      const credits = Number(record.credits) || 0; 
       totalPoints += gradePoints[record.grade] * credits;
       totalCredits += credits;
     });
+
+    if (totalCredits === 0) return "N/A";
+    
     return (totalPoints / totalCredits).toFixed(2);
   };
 
-  // Grouping Logic by Semester Name
+  // Grouping Logic by the New display_term
   const groupedGrades = grades.reduce((acc, current) => {
-    const term = current.semester_name || `Year ${current.year_number}`;
+    const term = current.display_term || 'Unassigned Electives'; 
     if (!acc[term]) acc[term] = [];
     acc[term].push(current);
     return acc;
@@ -59,6 +71,42 @@ function Profile({ user }) {
       </div>
 
       <h4 className="text-center mb-4" style={{ color: '#104929' }}>Academic Performance Record</h4>
+
+      {/* NEW: DRAFT PLAN BOX (Only shows if a plan exists) */}
+      {draftPlan && draftPlan.courses && draftPlan.courses.length > 0 && (
+        <div className="semester-box p-4 rounded shadow-sm border mb-5" style={{ backgroundColor: '#fffdfa', borderLeft: '5px solid #b9915e' }}>
+          <div className="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+            <h5 className="fw-bold m-0" style={{ color: '#b9915e' }}>
+              📝 Proposed Plan: {draftPlan.semester_name}
+            </h5>
+            <span className="badge bg-warning text-dark px-3 py-2" style={{ letterSpacing: '1px' }}>
+              {draftPlan.status.toUpperCase()}
+            </span>
+          </div>
+          
+          <table className="table table-hover align-middle">
+            <thead className="table-light">
+              <tr>
+                <th>Code</th>
+                <th>Course Name</th>
+                <th className="text-center">Credits</th>
+              </tr>
+            </thead>
+            <tbody>
+              {draftPlan.courses.map((course, idx) => (
+                <tr key={idx}>
+                  <td className="fw-bold text-muted">{course.course_id}</td>
+                  <td>{course.course_name}</td>
+                  <td className="fw-bold text-center">{course.credits} Cr</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-muted small text-end mt-2 fw-bold">
+            Total Planned Credits: {draftPlan.courses.reduce((sum, c) => sum + (Number(c.credits) || 3), 0)}
+          </div>
+        </div>
+      )}
 
       {/* DYNAMIC SEMESTER BOXES */}
       {Object.keys(groupedGrades).length > 0 ? (
@@ -94,18 +142,18 @@ function Profile({ user }) {
               </tbody>
             </table>
             <div className="text-muted small text-end mt-2">
-              Term Credits: {termCourses.reduce((sum, c) => sum + (c.credits || 3), 0)}
+              Term Credits: {termCourses.reduce((sum, c) => sum + (Number(c.credits) || 0), 0)}
             </div>
           </div>
         ))
       ) : (
-        <div className="text-center p-5 border rounded bg-light">
+        <div className="text-center p-5 border rounded bg-light mb-4">
           <p>No academic records found.</p>
         </div>
       )}
       <div className="text-center mt-5 mb-3">
         <Link to="/plan" className="btn btn-success btn-lg px-5 py-3 shadow" style={{ backgroundColor: '#104929', borderRadius: '30px', fontWeight: 'bold' }}>
-           Build a Semester / بناء الجدول الدراسي ➔
+           {draftPlan ? 'Edit Semester Plan / تعديل الجدول الدراسي ➔' : 'Build a Semester / بناء الجدول الدراسي ➔'}
         </Link>
       </div>
     </div>
