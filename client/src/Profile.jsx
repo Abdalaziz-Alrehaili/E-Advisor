@@ -77,7 +77,7 @@ function Profile({ user }) {
         <div className="semester-box p-4 rounded shadow-sm border mb-5" style={{ backgroundColor: '#fffdfa', borderLeft: '5px solid #b9915e' }}>
           <div className="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
             <h5 className="fw-bold m-0" style={{ color: '#b9915e' }}>
-              📝 Proposed Plan: {draftPlan.semester_name}
+              Proposed Plan: {draftPlan.semester_name}
             </h5>
             <span className="badge bg-warning text-dark px-3 py-2" style={{ letterSpacing: '1px' }}>
               {draftPlan.status.toUpperCase()}

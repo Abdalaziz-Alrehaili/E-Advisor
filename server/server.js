@@ -57,18 +57,22 @@ app.get('/courses', (req, res) => {
 
 app.get('/curriculum-status/:user_id', (req, res) => {
     const { user_id } = req.params;
+    
+    // JOIN with program_requirements to get the ideal_year and ideal_semester
     const sql = `
         SELECT 
             c.course_id, 
             c.course_name, 
             c.credits,
             e.status,
-            e.grade
-        FROM courses c
-        LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.student_id = (
-            SELECT student_id FROM students WHERE user_id = ?
-        )
-        ORDER BY c.course_id ASC;
+            e.grade,
+            pr.ideal_year,
+            pr.ideal_semester
+        FROM program_requirements pr
+        JOIN courses c ON pr.course_id = c.course_id
+        JOIN students s ON s.program_id = pr.program_id AND s.user_id = ?
+        LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.student_id = s.student_id
+        ORDER BY pr.ideal_year ASC, pr.ideal_semester ASC;
     `;
     db.query(sql, [user_id], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -120,36 +124,42 @@ app.post('/save-plan', (req, res) => {
         return res.status(400).json({ error: "No courses selected" });
     }
 
-    db.query('SELECT student_id FROM students WHERE user_id = ?', [user_id], (err, studentResult) => {
-        if (err || studentResult.length === 0) return res.status(500).json({ error: "Student not found" });
-        
-        const student_id = studentResult[0].student_id;
-        const courseIds = selectedCourses.map(course => course.course_id);
-        const selected_courses_json = JSON.stringify(courseIds);
-        
-        // Target upcoming semester (Semester 14 in your seed)
-        const semester_id = 14; 
-        const year_number = 2026;
+    // Check if ANY semester is open for registration
+    db.query('SELECT semester_id, semester_name FROM semesters WHERE is_registration_open = TRUE LIMIT 1', (err, semResult) => {
+        if (err) return res.status(500).json({ error: "Database error" });
+        if (semResult.length === 0) return res.status(403).json({ error: "Registration is currently closed by the Deanship." });
 
-        // Check if the student already has a plan
-        db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
-            if (err) return res.status(500).json({ error: "Database error" });
+        const open_semester_id = semResult[0].semester_id;
+        const semester_name = semResult[0].semester_name;
+        
+        // Extract the first 4-digit year from the semester name (e.g., "2027" from "First Semester 2027-2028")
+        const yearMatch = semester_name.match(/\d{4}/);
+        const dynamic_year_number = yearMatch ? parseInt(yearMatch[0]) : new Date().getFullYear();
 
-            if (draftResult.length > 0) {
-                // Rule 1: REPLACE / UPDATE existing plan
-                const sqlUpdate = 'UPDATE build_semester SET selected_courses_json = ?, status = "draft", updated_at = NOW() WHERE student_id = ?';
-                db.query(sqlUpdate, [selected_courses_json, student_id], (err) => {
-                    if (err) return res.status(500).json({ error: "Failed to update plan" });
-                    res.json({ success: true, message: "Plan updated successfully!" });
-                });
-            } else {
-                // Rule 1: INSERT new plan
-                const sqlInsert = 'INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")';
-                db.query(sqlInsert, [student_id, semester_id, year_number, selected_courses_json], (err) => {
-                    if (err) return res.status(500).json({ error: "Failed to create plan" });
-                    res.json({ success: true, message: "Plan saved successfully!" });
-                });
-            }
+        db.query('SELECT student_id FROM students WHERE user_id = ?', [user_id], (err, studentResult) => {
+            if (err || studentResult.length === 0) return res.status(500).json({ error: "Student not found" });
+            
+            const student_id = studentResult[0].student_id;
+            const courseIds = selectedCourses.map(course => course.course_id);
+            const selected_courses_json = JSON.stringify(courseIds);
+
+            db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
+                if (err) return res.status(500).json({ error: "Database error" });
+
+                if (draftResult.length > 0) {
+                    const sqlUpdate = 'UPDATE build_semester SET selected_courses_json = ?, semester_id = ?, year_number = ?, status = "draft", updated_at = NOW() WHERE student_id = ?';
+                    db.query(sqlUpdate, [selected_courses_json, open_semester_id, dynamic_year_number, student_id], (err) => {
+                        if (err) return res.status(500).json({ error: "Failed to update plan" });
+                        res.json({ success: true, message: "Plan updated successfully!" });
+                    });
+                } else {
+                    const sqlInsert = 'INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")';
+                    db.query(sqlInsert, [student_id, open_semester_id, dynamic_year_number, selected_courses_json], (err) => {
+                        if (err) return res.status(500).json({ error: "Failed to create plan" });
+                        res.json({ success: true, message: "Plan saved successfully!" });
+                    });
+                }
+            });
         });
     });
 });
@@ -210,6 +220,69 @@ app.get('/:table', (req, res) => {
     db.query(`SELECT * FROM ${req.params.table}`, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
+    });
+});
+
+// --- NEW ADMIN ROUTES ---
+
+// 1. Get all semesters for the Admin Panel
+app.get('/admin/semesters', (req, res) => {
+    db.query('SELECT * FROM semesters ORDER BY semester_id DESC', (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+// 2. Toggle Semester Registration Open/Closed
+app.put('/admin/semesters/:id/toggle', (req, res) => {
+    const { id } = req.params;
+    const { is_open } = req.body;
+    db.query('UPDATE semesters SET is_registration_open = ? WHERE semester_id = ?', [is_open, id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
+// 3. Get all Pending Student Plans
+app.get('/admin/plans', (req, res) => {
+    const sql = `
+        SELECT bs.build_id, bs.selected_courses_json, bs.status, bs.year_number,
+               s.semester_name, u.first_name, u.last_name, u.username as email
+        FROM build_semester bs
+        JOIN students st ON bs.student_id = st.student_id
+        JOIN users u ON st.user_id = u.user_id
+        JOIN semesters s ON bs.semester_id = s.semester_id
+        WHERE bs.status = 'draft'
+    `;
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+// 4. Approve a Plan (Changes status from 'draft' to 'submitted')
+app.put('/admin/plans/:id/approve', (req, res) => {
+    const { id } = req.params;
+    db.query('UPDATE build_semester SET status = "submitted" WHERE build_id = ?', [id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
+// 5. Create a New Semester
+app.post('/admin/semesters', (req, res) => {
+    const { semester_name, rule_id } = req.body;
+
+    if (!semester_name || !rule_id) {
+        return res.status(400).json({ error: "Missing semester name or rule ID" });
+    }
+
+    // Newly created semesters are closed by default
+    const sql = 'INSERT INTO semesters (semester_name, rule_id, is_registration_open) VALUES (?, ?, FALSE)';
+    
+    db.query(sql, [semester_name, rule_id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true, message: "Semester created successfully!" });
     });
 });
 
