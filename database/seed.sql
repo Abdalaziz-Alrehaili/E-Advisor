@@ -322,14 +322,21 @@ INSERT INTO program_requirements (program_id, slot_name, ideal_year, ideal_semes
 
 
 -- ==========================================
--- 9. Seed Users (Login Credentials)
+-- 9. Seed Users
 -- ==========================================
 
 INSERT INTO users (username, password, first_name, last_name, role) VALUES 
-('admin1', 'admin1', 'Matthew', 'Williams', 'admin'),
-('user1',   'user1',  'Adam',    'Rodriguez', 'student'),
-('user2',   'user2',  'Thiago',  'Garcia',    'student'),
-('user3',   'user3',  'John',    'Smith',     'student');
+-- Password: admin1
+('admin1', '25f43b1486ad95a1398e3eeb3d83bc4010015fcc9bedb35b432e00298d5021f7', 'Matthew', 'Williams', 'admin'),
+
+-- Password: student1
+('student1', '509e87a6c45ee0a3c657bf946dd6dc43d7e5502143be195280f279002e70f7d9', 'Adam', 'Rodriguez', 'student'),
+
+-- Password: student2
+('student2', 'eb4b3111401df980f14f28ad6804ae096df1e1c6963c51eab4140be226f8c94c', 'Thiago', 'Garcia', 'student'),
+
+-- Password: student3
+('student3', '373b29d2837e83b9ca5cec712a5985843df271cc7c06e64629472f4d03c6f83c', 'John', 'Smith', 'student');
 
 
 -- ==========================================
@@ -338,13 +345,13 @@ INSERT INTO users (username, password, first_name, last_name, role) VALUES
 
 INSERT INTO students (user_id, program_id, admission_year) VALUES 
 -- Adam: 5th Year (Started 2021)
-((SELECT user_id FROM users WHERE username = 'user1'), 1, 2021),
+((SELECT user_id FROM users WHERE username = 'student1'), 1, 2021),
 
 -- Thiago: 4th Year (Started 2022)
-((SELECT user_id FROM users WHERE username = 'user2'), 1, 2022),
+((SELECT user_id FROM users WHERE username = 'student2'), 1, 2022),
 
 -- John: 3rd Year (Started 2023)
-((SELECT user_id FROM users WHERE username = 'user3'), 1, 2023);
+((SELECT user_id FROM users WHERE username = 'student3'), 1, 2023);
 
 
 -- ==========================================
