@@ -432,9 +432,7 @@ INSERT INTO enrollments (student_id, section_id, course_id, year_number, status,
 -- Adam completed an elective early in Year 4
 (1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363') AND semester_id = 11), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'));
 
--- 4. Adam's CURRENT Semester (Year 5, Semester 1 - ID 13)
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status) VALUES 
-(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '498') AND semester_id = 13), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '498'), 5, 'undergoing');
+
 
 -- ---------------------------------------------------------
 -- THIAGO (Student 2): 4th Year, Behind Pace
@@ -462,9 +460,6 @@ WHERE pr.program_id = 1 AND pr.ideal_year = 3
   AND s.semester_id BETWEEN 7 AND 9
 GROUP BY c.course_id;
 
--- 3. Thiago's CURRENT Semester (Year 4, Semester 1 - ID 13)
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status) VALUES 
-(2, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '351') AND semester_id = 13), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '351'), 4, 'undergoing');
 
 -- ---------------------------------------------------------
 -- JOHN (Student 3): 3rd Year, Perfect Pace
@@ -480,11 +475,3 @@ JOIN sections s ON s.course_id = c.course_id
 WHERE pr.program_id = 1 AND pr.ideal_year <= 2 AND s.semester_id <= 6
 GROUP BY c.course_id, pr.ideal_year;
 
--- 2. John's CURRENT Semester (Year 3, Semester 1 - ID 13)
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status)
-SELECT 3, MIN(s.section_id), c.course_id, 3, 'undergoing'
-FROM program_requirements pr
-JOIN courses c ON pr.course_id = c.course_id
-JOIN sections s ON s.course_id = c.course_id
-WHERE pr.program_id = 1 AND pr.ideal_year = 3 AND pr.ideal_semester = '1' AND s.semester_id = 13
-GROUP BY c.course_id;
