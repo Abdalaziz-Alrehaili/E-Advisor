@@ -3,6 +3,7 @@ const mysql = require('mysql2');
 const cors = require('cors');
 const crypto = require('crypto');
 require('dotenv').config();
+const { buildCurriculumGraph } = require('./graphUtils');
 
 const app = express();
 app.use(cors());
@@ -283,6 +284,28 @@ app.post('/admin/semesters', (req, res) => {
     db.query(sql, [semester_name, rule_id], (err, result) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ success: true, message: "Semester created successfully!" });
+    });
+});
+
+
+// --- INTELLIGENCE ROUTES ---
+app.get('/api/curriculum-graph', (req, res) => {
+    // 1. Fetch both Courses and Prerequisites in parallel
+    const sqlCourses = 'SELECT * FROM courses';
+    const sqlPrereqs = 'SELECT * FROM prerequisites';
+
+    db.query(sqlCourses, (err, courses) => {
+        if (err) return res.status(500).json({ error: err.message });
+
+        db.query(sqlPrereqs, (err, prereqs) => {
+            if (err) return res.status(500).json({ error: err.message });
+
+            // 2. Use your "Brain" utility to build the DAG
+            const graph = buildCurriculumGraph(courses, prereqs);
+
+            // 3. Send the fully connected graph to the frontend
+            res.json(graph);
+        });
     });
 });
 

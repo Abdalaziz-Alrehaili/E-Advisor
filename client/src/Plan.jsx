@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 function Plan({ user }) {
+  const navigate = useNavigate();
   const [curriculum, setCurriculum] = useState([]);
   const [prerequisites, setPrerequisites] = useState([]); // NEW: State to hold prerequisite rules
   const [selectedCourses, setSelectedCourses] = useState([]);
@@ -30,20 +32,23 @@ function Plan({ user }) {
       body: JSON.stringify({
         user_id: user.user_id,
         selectedCourses: selectedCourses
-      })
+      }),
     })
     .then(res => res.json())
     .then(data => {
+      setLoading(false);
       if (data.success) {
-        alert("Plan Draft Saved! It has been sent to your advisor.");
-        window.location.reload(); 
+        alert("Plan saved successfully!"); // Optional: keep or remove the alert
+        navigate('/profile'); // This is the magic line that sends them back!
       } else {
-        alert("Error: " + data.error);
+        alert("Error saving plan: " + data.error);
       }
     })
-    .catch(err => console.error("Error:", err))
-    .finally(() => setLoading(false));
-  };
+    .catch(err => {
+      setLoading(false);
+      console.error("Error saving plan:", err);
+    });
+};
 
   // --- NEW: Prerequisite Checker Function ---
   const checkPrereqsMet = (courseId) => {
