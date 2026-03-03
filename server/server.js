@@ -343,5 +343,47 @@ app.get('/api/curriculum-graph', (req, res) => {
     });
 });
 
+app.get('/api/recommendations/:user_id', (req, res) => {
+    const { user_id } = req.params;
+
+    const sqlStatus = `
+        SELECT c.course_id, e.status
+        FROM courses c
+        JOIN program_requirements pr ON c.course_id = pr.course_id
+        JOIN students s ON s.program_id = pr.program_id AND s.user_id = ?
+        LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.student_id = s.student_id
+    `;
+
+    db.query(sqlStatus, [user_id], (err, statusResults) => {
+        if (err) return res.status(500).json({ error: err.message });
+
+        db.query('SELECT * FROM courses', (err, courses) => {
+            db.query('SELECT * FROM prerequisites', (err, prereqs) => {
+                const graph = buildCurriculumGraph(courses, prereqs);
+
+                // CHANGE: Filter out both 'completed' AND 'undergoing' courses
+                const takenIds = statusResults
+                    .filter(r => r.status === 'completed' || r.status === 'undergoing')
+                    .map(r => r.course_id);
+
+                const recommendations = Object.values(graph)
+                    .filter(course => !takenIds.includes(course.id)) 
+                    .filter(course => {
+                        return course.requires.every(reqId => takenIds.includes(reqId));
+                    })
+                    .map(course => {
+                        return {
+                            ...course,
+                            priorityScore: course.weight 
+                        };
+                    })
+                    .sort((a, b) => b.priorityScore - a.priorityScore);
+
+                res.json(recommendations);
+            });
+        });
+    });
+});
+
 const PORT = 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
