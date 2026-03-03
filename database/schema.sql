@@ -113,7 +113,7 @@ CREATE TABLE build_semester (
 CREATE TABLE enrollments (
     enrollment_id INT PRIMARY KEY AUTO_INCREMENT,
     student_id INT NOT NULL,
-    section_id INT NOT NULL,
+    section_id INT NULL,
     course_id INT NOT NULL,
     year_number INT NOT NULL,
     status ENUM('undergoing', 'completed') DEFAULT 'undergoing',
