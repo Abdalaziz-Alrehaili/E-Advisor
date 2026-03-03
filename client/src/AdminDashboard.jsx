@@ -49,6 +49,8 @@ function AdminDashboard() {
       if (data.success) {
         alert("Plan approved successfully!");
         fetchAdminData();
+      } else {
+        alert("Error: " + data.error);
       }
     });
   };
@@ -92,7 +94,7 @@ function AdminDashboard() {
 
       {/* Control Panel 1: Semester Registration Management */}
       <div className="card shadow-sm mb-5 border-0">
-        <div className="card-header text-white d-flex justify-content-between align-items-center">
+        <div className="card-header text-white d-flex justify-content-between align-items-center" style={{ backgroundColor: '#104929' }}>
           
           <button 
             onClick={() => setShowCreateForm(!showCreateForm)} 

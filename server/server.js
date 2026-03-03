@@ -224,6 +224,7 @@ app.get('/:table', (req, res) => {
     });
 });
 
+
 // --- NEW ADMIN ROUTES ---
 
 // 1. Get all semesters for the Admin Panel
@@ -261,12 +262,46 @@ app.get('/admin/plans', (req, res) => {
     });
 });
 
-// 4. Approve a Plan (Changes status from 'draft' to 'submitted')
+// 4. Approve a Plan, Move to Enrollments, and Delete the Draft
 app.put('/admin/plans/:id/approve', (req, res) => {
     const { id } = req.params;
-    db.query('UPDATE build_semester SET status = "submitted" WHERE build_id = ?', [id], (err) => {
+
+    // First, fetch the plan details
+    db.query('SELECT student_id, selected_courses_json, year_number FROM build_semester WHERE build_id = ?', [id], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
+        if (results.length === 0) return res.status(404).json({ error: "Plan not found" });
+
+        const plan = results[0];
+        const student_id = plan.student_id;
+        const year_number = plan.year_number;
+
+        let courseIds;
+        if (typeof plan.selected_courses_json === 'string') {
+            courseIds = JSON.parse(plan.selected_courses_json);
+        } else {
+            courseIds = plan.selected_courses_json;
+        }
+
+        if (!courseIds || courseIds.length === 0) {
+            return res.status(400).json({ error: "No courses to enroll" });
+        }
+
+        // Second, insert every single course into the enrollments table dynamically
+        const values = courseIds.map(course_id => [student_id, null, course_id, year_number, 'undergoing']);
+        const insertSql = 'INSERT INTO enrollments (student_id, section_id, course_id, year_number, status) VALUES ?';
+
+        db.query(insertSql, [values], (err) => {
+            if (err) {
+                console.error("Enrollment Insert Error:", err);
+                return res.status(500).json({ error: "Failed to push to enrollments." });
+            }
+
+            // Third, DELETE the draft from build_semester so it vanishes completely!
+            db.query('DELETE FROM build_semester WHERE build_id = ?', [id], (err) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({ success: true, message: "Plan officially approved, active, and draft cleared!" });
+            });
+        });
     });
 });
 
@@ -286,7 +321,6 @@ app.post('/admin/semesters', (req, res) => {
         res.json({ success: true, message: "Semester created successfully!" });
     });
 });
-
 
 // --- INTELLIGENCE ROUTES ---
 app.get('/api/curriculum-graph', (req, res) => {
