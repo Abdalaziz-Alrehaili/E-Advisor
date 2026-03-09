@@ -41,12 +41,12 @@ CREATE TABLE semester_rules (
 CREATE TABLE courses (
     course_id INT PRIMARY KEY AUTO_INCREMENT,
     dept_id INT NOT NULL,
-    course_prefix VARCHAR(10) NOT NULL, -- e.g., 'CPIS', 'MATH'
-    course_number VARCHAR(10) NOT NULL, -- e.g., '210', '101'
-    course_name VARCHAR(100) NOT NULL,  -- e.g., 'Computer Architecture & Organization'
+    course_prefix VARCHAR(10) NOT NULL, 
+    course_number VARCHAR(10) NOT NULL, 
+    course_name VARCHAR(100) NOT NULL,  
     credits INT NOT NULL DEFAULT 3,
     FOREIGN KEY (dept_id) REFERENCES departments(dept_id),
-    UNIQUE (course_prefix, course_number) -- Prevents adding CPIS-210 twice
+    UNIQUE (course_prefix, course_number) 
 );
 
 CREATE TABLE prerequisites (
@@ -62,6 +62,8 @@ CREATE TABLE semesters (
     semester_name VARCHAR(50), 
     rule_id INT NOT NULL,
     is_registration_open BOOLEAN DEFAULT FALSE,
+    registration_close_date DATE DEFAULT NULL,
+    is_completed BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (rule_id) REFERENCES semester_rules(rule_id)
 );
 
