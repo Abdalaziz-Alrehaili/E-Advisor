@@ -6,6 +6,7 @@ import Plan from './Plan';
 import Explorer from './Explorer';
 import AdminDashboard from './AdminDashboard'; 
 import './App.css';
+import 'bootstrap/dist/css/bootstrap.min.css';
 
 function App() {
   // Logic: Check the browser's memory for a saved user session
@@ -57,8 +58,9 @@ function App() {
         </div>
       </nav>
 
-      <div className="container d-flex flex-column align-items-center">
-        <div className="w-100" style={{ maxWidth: '1100px' }}>
+      {/* CHANGED HERE: container-fluid instead of container, and removed the 1100px max-width */}
+      <div className="container-fluid d-flex flex-column align-items-center">
+        <div className="w-100">
           <Routes>
             <Route path="/" element={
               !user ? <LoginAndRegister onLogin={handleLogin} /> 
