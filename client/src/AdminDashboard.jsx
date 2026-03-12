@@ -55,6 +55,15 @@ function AdminDashboard() {
 
   return (
     <div className="full-width-white-box pt-4">
+      
+      {/* INJECTED CSS: This physically tints the browser's native calendar icon to match #104929 */}
+      <style>{`
+        .custom-green-date::-webkit-calendar-picker-indicator {
+          filter: invert(21%) sepia(42%) saturate(526%) hue-rotate(103deg) brightness(95%) contrast(92%);
+          cursor: pointer;
+        }
+      `}</style>
+
       <div className="centered-content-container">
         
         <div className="text-center mb-5">
@@ -70,7 +79,8 @@ function AdminDashboard() {
                 onClick={() => handleActionClick(btn)}
               >
                 <h2 className="fw-bold mb-4" style={{ letterSpacing: '0.5px' }}>{btn.semester_name}</h2>
-                <div className="badge px-5 py-3 fs-5 rounded-pill shadow-sm" style={{ backgroundColor: 'rgba(255,255,255,0.9)' }}>
+                
+                <div className="badge px-5 py-3 fs-5 rounded-pill shadow-sm" style={{ backgroundColor: 'rgba(255,255,255,0.9)', color: '#000000' }}>
                   {btn.state === 'green' && '🟢 CLICK TO OPEN'}
                   {btn.state === 'red' && '🔴 CLICK TO CLOSE'}
                   {btn.state === 'grey' && '🔒 LOCKED (WAITING TURN)'}
@@ -82,7 +92,7 @@ function AdminDashboard() {
 
       </div>
 
-      {/* --- DATE PICKER MODAL (WIDER WITH MORE PADDING) --- */}
+      {/* --- DATE PICKER MODAL --- */}
       {openPrompt && (
         <div 
             className="bg-white rounded text-start" 
@@ -92,8 +102,8 @@ function AdminDashboard() {
                 left: '50%', 
                 transform: 'translate(-50%, -50%)', 
                 zIndex: 9999, 
-                width: '550px', /* Made wider */
-                padding: '50px', /* Extra breathing room inside the box */
+                width: '550px', 
+                padding: '50px', 
                 borderTop: '8px solid #1a9044',
                 borderLeft: '1px solid #ddd',
                 borderRight: '1px solid #ddd',
@@ -104,21 +114,35 @@ function AdminDashboard() {
             <h3 className="fw-bold mb-3" style={{ color: '#104929' }}>Set Registration Deadline</h3>
             
             <p className="text-muted mb-4" style={{ fontSize: '1.05rem' }}>
-                Set a deadline so students know when they must finalize their <strong>{openPrompt.semester_name}</strong> drafts.
+                Set a deadline so students know when they must finalize their <strong>{openPrompt.semester_name}</strong> plan.
             </p>
             
             <label className="fw-bold mb-2" style={{ color: '#104929' }}>Approximate Closing Date:</label>
             <input 
                 type="date" 
-                className="form-control form-control-lg mb-4" 
+                /* Added the custom-green-date class right here! */
+                className="form-control form-control-lg mb-4 custom-green-date" 
                 value={closeDate} 
                 onChange={e => setCloseDate(e.target.value)}
-                style={{ border: '2px solid #e9ecef', cursor: 'pointer' }}
+                style={{ border: '2px solid #104929', cursor: 'pointer', color: '#104929', colorScheme: 'light' }}
             />
             
             <div className="d-flex justify-content-end gap-3 mt-4">
-                <button className="btn btn-secondary fw-bold px-4 py-2" onClick={() => setOpenPrompt(null)}>Cancel</button>
-                <button className="btn btn-success fw-bold px-4 py-2" onClick={confirmOpen} disabled={!closeDate}>Confirm & Open</button>
+                <button 
+                  className="btn btn-secondary fw-bold px-4 py-2" 
+                  onClick={() => setOpenPrompt(null)}
+                  style={{ color: '#ffffff' }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  className="btn btn-success fw-bold px-4 py-2" 
+                  onClick={confirmOpen} 
+                  disabled={!closeDate}
+                  style={{ color: '#000000' }}
+                >
+                  Confirm & Open
+                </button>
             </div>
         </div>
       )}
