@@ -54,13 +54,32 @@ app.get('/curriculum-status/:user_id', (req, res) => {
 });
 
 app.get('/semesters', (req, res) => {
-    db.query('SELECT s.semester_id, s.semester_name, r.semester_type, r.max_credits FROM semesters s JOIN semester_rules r ON s.rule_id = r.rule_id', (err, results) => res.json(results));
+    db.query('SELECT s.semester_id, s.semester_name, r.semester_type, r.max_credits, r.min_credits FROM semesters s JOIN semester_rules r ON s.rule_id = r.rule_id', (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
-// FIX: Added c.course_prefix and c.course_number to the SELECT query
+// FIXED: Now grabs the actual semester_id from enrollments!
 app.get('/my-grades/:user_id', (req, res) => {
-    const sql = `SELECT c.course_id, c.course_prefix, c.course_number, c.course_name, e.grade, e.status, c.credits, e.year_number, pr.ideal_semester, CONCAT('Year ', e.year_number, ' - Semester ', pr.ideal_semester) AS display_term FROM enrollments e JOIN courses c ON e.course_id = c.course_id JOIN students s ON e.student_id = s.student_id JOIN program_requirements pr ON c.course_id = pr.course_id AND s.program_id = pr.program_id WHERE s.user_id = ? ORDER BY e.year_number ASC, pr.ideal_semester ASC`;
-    db.query(sql, [req.params.user_id], (err, results) => res.json(results));
+    const sql = `
+        SELECT 
+            c.course_id, c.course_prefix, c.course_number, c.course_name, 
+            e.grade, e.status, c.credits, e.year_number, 
+            pr.ideal_semester,
+            sem.rule_id AS actual_rule_id
+        FROM enrollments e 
+        JOIN courses c ON e.course_id = c.course_id 
+        JOIN students s ON e.student_id = s.student_id 
+        JOIN program_requirements pr ON c.course_id = pr.course_id AND s.program_id = pr.program_id 
+        LEFT JOIN semesters sem ON e.semester_id = sem.semester_id
+        WHERE s.user_id = ? 
+        ORDER BY e.year_number ASC, actual_rule_id ASC, pr.ideal_semester ASC
+    `;
+    db.query(sql, [req.params.user_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
 app.get('/my-major/:user_id', (req, res) => {
@@ -102,7 +121,6 @@ app.get('/my-draft/:user_id', (req, res) => {
                     
                     if (!courseIds || courseIds.length === 0) return res.json({ ...draft, courses: [] });
 
-                    // FIX: Added course_prefix and course_number here too
                     db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [courseIds], (err, courses) => {
                         if (err) return res.status(500).json({ error: err.message });
                         res.json({ ...draft, courses });
@@ -135,12 +153,19 @@ app.post('/save-plan', (req, res) => {
         if (err || semResult.length === 0) return res.status(403).json({ error: "Registration is currently closed." });
 
         const open_semester_id = semResult[0].semester_id;
-        const yearMatch = semResult[0].semester_name.match(/\d{4}/);
-        const dynamic_year_number = yearMatch ? parseInt(yearMatch[0]) : new Date().getFullYear();
+        const open_semester_name = semResult[0].semester_name;
 
-        db.query('SELECT student_id FROM students WHERE user_id = ?', [user_id], (err, studentResult) => {
+        // NEW LOGIC: Calculate academic year (1, 2, 3, 4...) instead of calendar year (2026)
+        db.query('SELECT s.student_id, IFNULL(MAX(e.year_number), 0) as max_year FROM students s LEFT JOIN enrollments e ON s.student_id = e.student_id WHERE s.user_id = ? GROUP BY s.student_id', [user_id], (err, studentResult) => {
             if (err || studentResult.length === 0) return res.status(500).json({ error: "Student not found" });
+            
             const student_id = studentResult[0].student_id;
+            // Ignore any accidental 2026 values if they got stuck in the DB from previous tests
+            const max_year = studentResult[0].max_year > 10 ? 0 : studentResult[0].max_year; 
+            
+            const isFirstSem = open_semester_name.toLowerCase().includes('first') || open_semester_name.includes('1');
+            const dynamic_year_number = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
+
             const courseIds = selectedCourses.map(course => course.course_id);
             const selected_courses_json = JSON.stringify(courseIds);
 
@@ -213,6 +238,7 @@ app.get('/admin/semester-board', (req, res) => {
     });
 });
 
+// FIXED: Bulk insertion now correctly passes semester_id!
 app.post('/admin/semester-action', (req, res) => {
     const { semester_id, action, semester_name, close_date } = req.body;
     
@@ -224,17 +250,45 @@ app.post('/admin/semester-action', (req, res) => {
             });
         });
     } else if (action === 'close') {
-        db.query('UPDATE semesters SET is_registration_open = 0, is_completed = TRUE WHERE semester_id = ?', [semester_id], (err) => {
+        db.query('SELECT student_id, selected_courses_json, year_number FROM build_semester WHERE semester_id = ?', [semester_id], (err, plans) => {
             if (err) return res.status(500).json({error: err.message});
+
+            let enrollmentsData = [];
             
-            const nextName = generateNextSemesterName(semester_name);
-            db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
-                const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
-                db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err) => {
-                    if (err) return res.status(500).json({error: err.message});
-                    res.json({success: true});
+            plans.forEach(plan => {
+                let courseIds = [];
+                try { courseIds = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) {}
+                
+                courseIds.forEach(cId => {
+                    enrollmentsData.push([plan.student_id, null, cId, plan.year_number, 'undergoing', semester_id]);
                 });
             });
+
+            const finalizeClose = () => {
+                db.query('DELETE FROM build_semester WHERE semester_id = ?', [semester_id], () => {
+                    db.query('UPDATE semesters SET is_registration_open = 0, is_completed = TRUE WHERE semester_id = ?', [semester_id], (err) => {
+                        if (err) return res.status(500).json({error: err.message});
+                        
+                        const nextName = generateNextSemesterName(semester_name);
+                        db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
+                            const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
+                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err) => {
+                                if (err) return res.status(500).json({error: err.message});
+                                res.json({success: true});
+                            });
+                        });
+                    });
+                });
+            };
+
+            if (enrollmentsData.length > 0) {
+                db.query('INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, semester_id) VALUES ?', [enrollmentsData], (err) => {
+                    if (err) return res.status(500).json({error: err.message});
+                    finalizeClose();
+                });
+            } else {
+                finalizeClose();
+            }
         });
     }
 });

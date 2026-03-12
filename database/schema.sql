@@ -117,11 +117,13 @@ CREATE TABLE enrollments (
     student_id INT NOT NULL,
     section_id INT NULL,
     course_id INT NOT NULL,
+    semester_id INT NOT NULL,
     year_number INT NOT NULL,
     status ENUM('undergoing', 'completed') DEFAULT 'undergoing',
     grade VARCHAR(2) DEFAULT NULL,
     FOREIGN KEY (student_id) REFERENCES students(student_id),
     FOREIGN KEY (section_id) REFERENCES sections(section_id),
     FOREIGN KEY (course_id) REFERENCES courses(course_id),
+    FOREIGN KEY (semester_id) REFERENCES semesters(semester_id), -- New Foreign Key here!
     UNIQUE (student_id, section_id)
 );

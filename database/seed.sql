@@ -162,13 +162,14 @@ INSERT INTO prerequisites (course_id, prereq_id) VALUES
 ((SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '428'), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323')),
 ((SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '499'), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '498'));
 
+
 -- ==========================================
 -- 6. Seed Semester Rules
 -- ==========================================
-INSERT INTO semester_rules (semester_type, min_credits, max_credits) VALUES 
-('1', 12, 18),      
-('2', 12, 18),      
-('Summer', 2, 9);   
+INSERT INTO semester_rules (semester_type, max_credits, min_credits) VALUES
+('1', 20, 10),       -- First Semester: max 20, min 10
+('2', 20, 10),       -- Second Semester: max 20, min 10
+('Summer', 9, 0);    -- Summer Semester: max 9, min 0
 
 
 -- ==========================================
@@ -333,12 +334,16 @@ SELECT
     30
 FROM courses c;
 
+
 -- ==========================================
 -- 12. Seed Enrollments
 -- ==========================================
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
+
+-- ================= STUDENT 1 =================
+INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade, semester_id)
 SELECT 1, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'),
+       (pr.ideal_year - 1) * 3 + pr.ideal_semester
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
@@ -346,11 +351,12 @@ WHERE pr.program_id = 1
   AND pr.ideal_year <= 3 
   AND s.semester_id <= 9
   AND pr.requirement_type = 'core'
-GROUP BY c.course_id, pr.ideal_year;
+GROUP BY c.course_id, pr.ideal_year, pr.ideal_semester;
 
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
+INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade, semester_id)
 SELECT 1, MIN(s.section_id), c.course_id, 4, 'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'),
+       (pr.ideal_year - 1) * 3 + pr.ideal_semester
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
@@ -358,38 +364,54 @@ WHERE pr.program_id = 1 AND pr.ideal_year = 4
   AND s.semester_id BETWEEN 10 AND 12
   AND pr.requirement_type = 'core'
   AND c.course_number != '323' 
-GROUP BY c.course_id;
+GROUP BY c.course_id, pr.ideal_year, pr.ideal_semester;
 
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade) VALUES 
-(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323') AND semester_id = 12), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')),
-(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401') AND semester_id = 11), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')),
-(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363') AND semester_id = 11), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'));
+INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade, semester_id) VALUES 
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323') AND semester_id = 12 LIMIT 1), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'), 12),
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401') AND semester_id = 11 LIMIT 1), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '401'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'), 11),
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363') AND semester_id = 11 LIMIT 1), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363'), 4, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'), 11);
 
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
+-- ================= STUDENT 2 =================
+-- Realistic "slightly behind" student
+INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade, semester_id)
 SELECT 2, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'),
+       (pr.ideal_year - 1) * 3 + pr.ideal_semester
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
-WHERE pr.program_id = 1 AND pr.ideal_year <= 2 AND s.semester_id <= 6
-GROUP BY c.course_id, pr.ideal_year;
+WHERE pr.program_id = 1 
+  AND pr.ideal_year <= 3 
+  AND s.semester_id <= 9
+  -- Drops to test the planner:
+  AND NOT (c.course_prefix = 'CPIS' AND c.course_number = '250') 
+  AND NOT (c.course_prefix = 'BUS' AND c.course_number = '232')  
+  AND NOT (c.course_prefix = 'CPIS' AND c.course_number = '312') 
+  -- Exclude ISLS to manually shift them below:
+  AND NOT (c.course_prefix = 'ISLS' AND c.course_number = '101')
+  AND NOT (c.course_prefix = 'ISLS' AND c.course_number = '201')
+GROUP BY c.course_id, pr.ideal_year, pr.ideal_semester;
 
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
-SELECT 2, MIN(s.section_id), c.course_id, 3, 'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
-FROM program_requirements pr
-JOIN courses c ON pr.course_id = c.course_id
-JOIN sections s ON s.course_id = c.course_id
-WHERE pr.program_id = 1 AND pr.ideal_year = 3 
-  AND c.course_number NOT IN ('250', '222', '232')
-  AND s.semester_id BETWEEN 7 AND 9
-GROUP BY c.course_id;
+-- Manually insert the shifted ISLS courses for Student 2
+INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade, semester_id) VALUES 
+(2, 
+  (SELECT MIN(section_id) FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '101')), 
+  (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '101'), 
+  2, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'), 5), -- Year 2, Sem 2
+(2, 
+  (SELECT MIN(section_id) FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '201')), 
+  (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '201'), 
+  3, 'completed', ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'), 7); -- Year 3, Sem 1
 
-INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade)
+
+-- ================= STUDENT 3 =================
+-- Standard student, halfway through
+INSERT INTO enrollments (student_id, section_id, course_id, year_number, status, grade, semester_id)
 SELECT 3, MIN(s.section_id), c.course_id, pr.ideal_year, 'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D'),
+       (pr.ideal_year - 1) * 3 + pr.ideal_semester
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
 JOIN sections s ON s.course_id = c.course_id
 WHERE pr.program_id = 1 AND pr.ideal_year <= 2 AND s.semester_id <= 6
-GROUP BY c.course_id, pr.ideal_year;
+GROUP BY c.course_id, pr.ideal_year, pr.ideal_semester;
