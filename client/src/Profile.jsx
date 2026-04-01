@@ -5,6 +5,11 @@ function Profile({ user }) {
   const [grades, setGrades] = useState([]);
   const [draftPlan, setDraftPlan] = useState(null);
   const [major, setMajor] = useState('');
+  
+  // NEW: Modal State for section details
+  const [showModal, setShowModal] = useState(false);
+  const [selectedSemDetails, setSelectedSemDetails] = useState([]);
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
   const fetchDraft = () => {
     fetch(`http://localhost:5000/my-draft/${user.user_id}`)
@@ -14,6 +19,22 @@ function Profile({ user }) {
           setDraftPlan(data);
       })
       .catch(err => { console.error("Draft error:", err); setDraftPlan(null); });
+  };
+
+  // NEW: Function to open modal and fetch section-specific data
+  const fetchSemDetails = (semesterId) => {
+    setLoadingDetails(true);
+    setShowModal(true);
+    fetch(`http://localhost:5000/enrollment-details/${user.user_id}/${semesterId}`)
+      .then(res => res.json())
+      .then(data => {
+          setSelectedSemDetails(data);
+          setLoadingDetails(false);
+      })
+      .catch(err => {
+          console.error("Details fetch error:", err);
+          setLoadingDetails(false);
+      });
   };
 
   useEffect(() => {
@@ -67,9 +88,7 @@ function Profile({ user }) {
   };
 
   const safeGrades = Array.isArray(grades) ? grades : [];
-  
   const totalCreditsDone = safeGrades.filter(c => c.status === 'completed').reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
-
   const isCurrentlyUndergoing = safeGrades.some(c => c.status === 'undergoing');
 
   const yearData = safeGrades.reduce((acc, current) => {
@@ -83,7 +102,8 @@ function Profile({ user }) {
 
     if (!acc[year][semKey]) acc[year][semKey] = { 
       name: `Year ${year} - ${semKey === 'Summer' ? 'Summer' : 'Sem ' + semKey}`, 
-      courses: [] 
+      courses: [],
+      semester_id: current.semester_id // Store ID to fetch details later
     };
     acc[year][semKey].courses.push(current);
     return acc;
@@ -118,18 +138,14 @@ function Profile({ user }) {
   let isLogicalNextSemester = true;
   if (maxYear > 0) {
       if (maxSemRule === 3) {
-          isLogicalNextSemester = (regSemRule === 1); // After Summer -> Only First Sem is allowed
+          isLogicalNextSemester = (regSemRule === 1);
       } else if (maxSemRule === 2) {
-          isLogicalNextSemester = (regSemRule === 3 || regSemRule === 1); // After Sem 2 -> Summer OR First Sem (if skipping summer)
+          isLogicalNextSemester = (regSemRule === 3 || regSemRule === 1);
       } else if (maxSemRule === 1) {
-          isLogicalNextSemester = (regSemRule === 2); // After Sem 1 -> Only Second Sem is allowed
+          isLogicalNextSemester = (regSemRule === 2);
       }
   }
 
-  // Hide the registration box if:
-  // 1. There is no open registration
-  // 2. The student is currently in an ongoing semester
-  // 3. The open registration breaks chronological order
   const isRegOpen = draftPlan !== null && !isCurrentlyUndergoing && isLogicalNextSemester;
   
   const regYear = isRegOpen ? (draftPlan.year_number || 1) : null;
@@ -148,6 +164,8 @@ function Profile({ user }) {
           70% { box-shadow: 0 0 0 8px rgba(13, 110, 253, 0); } 
           100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, 0); } 
         }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+        .details-modal { background: white; padding: 40px; border-radius: 15px; width: 850px; max-height: 85vh; overflow-y: auto; border-top: 10px solid #0d6efd; position: relative; }
       `}</style>
 
       <div className="centered-content-container">
@@ -251,8 +269,6 @@ function Profile({ user }) {
                 
                 const themeColor = isUndergoing ? '#0d6efd' : '#104929'; 
                 const cellBgColor = isRegistrationSlot ? '#fdfdf8' : (isUndergoing ? '#fdfdf8' : 'transparent');
-                
-                // If it has semData AND is a registration slot (edge case fallback), keep the normal borders
                 const borderAccent = isUndergoing ? '#0d6efd' : (isRegistrationSlot && !semData ? '#8c6b41' : '#1a9044');
 
                 const cellStyle = {
@@ -329,7 +345,19 @@ function Profile({ user }) {
                           </tbody>
                         </table>
 
-                        {/* Edge case fallback: If the backend incorrectly allows registration in a completed slot, append it below */}
+                        {/* NEW: Centered Details Button for In Progress Semesters */}
+                        {isUndergoing && (
+                            <div className="mt-auto pt-4 text-center">
+                                <button 
+                                    className="btn fw-bold px-4 py-2 shadow-sm" 
+                                    style={{ backgroundColor: '#0d6efd', color: 'white', borderRadius: '8px', border: 'none' }}
+                                    onClick={() => fetchSemDetails(semData.semester_id)}
+                                >
+                                  Details
+                                </button>
+                            </div>
+                        )}
+
                         {isRegistrationSlot && (
                           <div className="mt-4 pt-4 border-top border-warning flex-grow-1 d-flex flex-column">
                             <h5 className="fw-bold mb-3 text-warning" style={{ color: '#8c6b41' }}>
@@ -461,6 +489,50 @@ function Profile({ user }) {
           </div>
         )}
       </div>
+
+      {/* NEW: DETAILS POPUP MODAL */}
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="details-modal shadow-lg" onClick={e => e.stopPropagation()}>
+            <div className="d-flex justify-content-between align-items-center mb-4">
+              <h2 className="fw-bold m-0" style={{ color: '#0d6efd' }}>Semester Schedule</h2>
+              <button className="btn-close" onClick={() => setShowModal(false)}></button>
+            </div>
+
+            {loadingDetails ? (
+              <div className="text-center p-5"><div className="spinner-border text-primary" role="status"></div><p className="mt-2">Loading schedule...</p></div>
+            ) : (
+              <div className="table-responsive">
+                <table className="table align-middle">
+                  <thead className="table-light">
+                    <tr>
+                      <th>Course</th>
+                      <th>Professor</th>
+                      <th>Days</th>
+                      <th>Time</th>
+                      <th>Room</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedSemDetails.map((item, i) => (
+                      <tr key={i}>
+                        <td className="fw-bold">{item.course_prefix}-{item.course_number}</td>
+                        <td>{item.professor_name || 'TBA'}</td>
+                        <td><span className="badge bg-primary px-3">{item.days}</span></td>
+                        <td>{item.start_time?.substring(0,5)} - {item.end_time?.substring(0,5)}</td>
+                        <td>{item.room_number}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="text-end mt-4">
+              <button className="btn btn-secondary fw-bold px-4" onClick={() => setShowModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

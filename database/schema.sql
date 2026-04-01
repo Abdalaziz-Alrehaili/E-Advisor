@@ -94,8 +94,12 @@ CREATE TABLE sections (
     course_id INT NOT NULL,
     semester_id INT NOT NULL,
     section_name VARCHAR(10),
+    professor_name VARCHAR(100),
+    days VARCHAR(20),
+    start_time TIME,
+    end_time TIME,
+    room_number VARCHAR(50),
     max_capacity INT DEFAULT 30,
-    current_enrolled INT DEFAULT 0,
     FOREIGN KEY (course_id) REFERENCES courses(course_id),
     FOREIGN KEY (semester_id) REFERENCES semesters(semester_id)
 );
