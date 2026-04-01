@@ -19,7 +19,6 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
-// --- AUTHENTICATION ROUTE ---
 const hashPassword = (password) => crypto.createHash('sha256').update(password).digest('hex');
 
 app.post('/login', (req, res) => {
@@ -27,10 +26,7 @@ app.post('/login', (req, res) => {
     const hashedPassword = hashPassword(password.trim());
     const sql = 'SELECT * FROM users WHERE username = ? AND password = ?';
     db.query(sql, [username, hashedPassword], (err, results) => {
-        if (err) {
-            console.error("Login Error:", err);
-            return res.status(500).json({ error: "Database error" });
-        }
+        if (err) return res.status(500).json({ error: "Database error" });
         if (results.length > 0) {
             const user = results[0];
             delete user.password;
@@ -41,7 +37,6 @@ app.post('/login', (req, res) => {
     });
 });
 
-// --- DATA ROUTES ---
 app.get('/students', (req, res) => {
     const sql = `SELECT s.student_id as id, u.first_name, u.last_name, u.username as email FROM students s JOIN users u ON s.user_id = u.user_id`;
     db.query(sql, (err, results) => {
@@ -57,7 +52,6 @@ app.get('/courses', (req, res) => {
     });
 });
 
-// NEW: Required for the Plan.jsx Section Selector
 app.get('/sections', (req, res) => {
     db.query('SELECT * FROM sections', (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -65,8 +59,27 @@ app.get('/sections', (req, res) => {
     });
 });
 
+// UPGRADED: Grabs the placeholder name for historical electives so the frontend can display the golden tag
 app.get('/curriculum-status/:user_id', (req, res) => {
-    const sql = `SELECT c.course_id, c.course_name, c.course_prefix, c.course_number, c.credits, e.status, e.grade, pr.ideal_year, pr.ideal_semester FROM program_requirements pr JOIN courses c ON pr.course_id = c.course_id JOIN students s ON s.program_id = pr.program_id AND s.user_id = ? LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.student_id = s.student_id ORDER BY pr.ideal_year ASC, pr.ideal_semester ASC`;
+    const sql = `
+        SELECT 
+            IFNULL(real_c.course_id, c.course_id) AS course_id, 
+            IFNULL(real_c.course_name, c.course_name) AS course_name, 
+            IFNULL(real_c.course_prefix, c.course_prefix) AS course_prefix, 
+            IFNULL(real_c.course_number, c.course_number) AS course_number, 
+            IFNULL(real_c.credits, c.credits) AS credits, 
+            e.status, 
+            e.grade, 
+            pr.ideal_year, 
+            pr.ideal_semester,
+            CASE WHEN e.placeholder_id IS NOT NULL THEN c.course_name ELSE NULL END AS historical_placeholder_name
+        FROM program_requirements pr 
+        JOIN courses c ON pr.course_id = c.course_id 
+        JOIN students s ON s.program_id = pr.program_id AND s.user_id = ? 
+        LEFT JOIN enrollments e ON (c.course_id = e.course_id OR c.course_id = e.placeholder_id) AND e.student_id = s.student_id 
+        LEFT JOIN courses real_c ON e.course_id = real_c.course_id AND e.placeholder_id IS NOT NULL
+        ORDER BY pr.ideal_year ASC, pr.ideal_semester ASC
+    `;
     db.query(sql, [req.params.user_id], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
@@ -90,7 +103,7 @@ app.get('/my-grades/:user_id', (req, res) => {
         FROM enrollments e 
         JOIN courses c ON e.course_id = c.course_id 
         JOIN students s ON e.student_id = s.student_id 
-        JOIN program_requirements pr ON c.course_id = pr.course_id AND s.program_id = pr.program_id 
+        JOIN program_requirements pr ON (c.course_id = pr.course_id OR e.placeholder_id = pr.course_id) AND s.program_id = pr.program_id 
         LEFT JOIN semesters sem ON e.semester_id = sem.semester_id
         WHERE s.user_id = ? 
         ORDER BY e.year_number ASC, actual_rule_id ASC, pr.ideal_semester ASC
@@ -102,25 +115,17 @@ app.get('/my-grades/:user_id', (req, res) => {
 });
 
 app.get('/my-major/:user_id', (req, res) => {
-    const sql = `
-        SELECT p.program_name 
-        FROM students s 
-        JOIN programs p ON s.program_id = p.program_id 
-        WHERE s.user_id = ?
-    `;
+    const sql = `SELECT p.program_name FROM students s JOIN programs p ON s.program_id = p.program_id WHERE s.user_id = ?`;
     db.query(sql, [req.params.user_id], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ major: results.length > 0 ? results[0].program_name : 'Unknown Major' });
     });
 });
 
-// NEW: ENROLLMENT DETAILS (For Profile Modal)
 app.get('/enrollment-details/:user_id/:semester_id', (req, res) => {
     const { user_id, semester_id } = req.params;
     const sql = `
-        SELECT 
-            c.course_prefix, c.course_number, c.course_name,
-            s.professor_name, s.days, s.start_time, s.end_time, s.room_number
+        SELECT c.course_prefix, c.course_number, c.course_name, s.professor_name, s.days, s.start_time, s.end_time, s.room_number
         FROM enrollments e
         JOIN courses c ON e.course_id = c.course_id
         JOIN sections s ON e.section_id = s.section_id
@@ -128,18 +133,13 @@ app.get('/enrollment-details/:user_id/:semester_id', (req, res) => {
         WHERE st.user_id = ? AND e.semester_id = ?
     `;
     db.query(sql, [user_id, semester_id], (err, results) => {
-        if (err) {
-            console.error("Fetch Enrollment Details Error:", err);
-            return res.status(500).json({ error: err.message });
-        }
+        if (err) return res.status(500).json({ error: err.message });
         res.json(results);
     });
 });
 
-// --- FETCH DRAFT PLAN ROUTE ---
 app.get('/my-draft/:user_id', (req, res) => {
     const { user_id } = req.params;
-
     db.query('SELECT semester_id, semester_name, registration_close_date FROM semesters WHERE is_registration_open = TRUE LIMIT 1', (err, semResults) => {
         if (err) return res.status(500).json({ error: err.message });
         const openSemester = semResults[0];
@@ -150,23 +150,18 @@ app.get('/my-draft/:user_id', (req, res) => {
             if (studentResults.length === 0) return res.json(null); 
 
             const { student_id, max_year } = studentResults[0];
-
             const sqlDraft = `SELECT bs.selected_courses_json, bs.status, bs.year_number, s.semester_name, s.semester_id, s.registration_close_date FROM build_semester bs JOIN semesters s ON bs.semester_id = s.semester_id WHERE bs.student_id = ?`;
+            
             db.query(sqlDraft, [student_id], (err, draftResults) => {
                 if (err) return res.status(500).json({ error: err.message });
 
                 if (draftResults.length > 0) {
                     const draft = draftResults[0];
                     let coursesArr;
-                    try { 
-                        coursesArr = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; 
-                    } catch(e) { coursesArr = []; }
-                    
+                    try { coursesArr = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) { coursesArr = []; }
                     if (!coursesArr || coursesArr.length === 0) return res.json({ ...draft, courses: [] });
 
-                    // Support both old array of IDs and new array of objects
                     const ids = coursesArr.map(c => c.course_id || c);
-
                     db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [ids], (err, courses) => {
                         if (err) return res.status(500).json({ error: err.message });
                         res.json({ ...draft, courses });
@@ -174,7 +169,6 @@ app.get('/my-draft/:user_id', (req, res) => {
                 } else if (openSemester) {
                     const isFirstSem = openSemester.semester_name.toLowerCase().includes('first') || openSemester.semester_name.includes('1');
                     const academicYear = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
-
                     res.json({
                         semester_name: openSemester.semester_name,
                         semester_id: openSemester.semester_id,
@@ -206,11 +200,8 @@ app.post('/save-plan', (req, res) => {
             
             const student_id = studentResult[0].student_id;
             const max_year = studentResult[0].max_year > 10 ? 0 : studentResult[0].max_year; 
-            
             const isFirstSem = open_semester_name.toLowerCase().includes('first') || open_semester_name.includes('1');
             const dynamic_year_number = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
-
-            // This now saves the full object including selected_section_id
             const selected_courses_json = JSON.stringify(selectedCourses);
 
             db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
@@ -234,7 +225,6 @@ app.delete('/delete-plan/:user_id', (req, res) => {
     db.query('SELECT student_id FROM students WHERE user_id = ?', [req.params.user_id], (err, studentResult) => {
         if (err || studentResult.length === 0) return res.status(500).json({ error: "Student not found" });
         const student_id = studentResult[0].student_id;
-        
         db.query('DELETE FROM build_semester WHERE student_id = ?', [student_id], (err) => {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ success: true });
@@ -306,13 +296,10 @@ app.post('/admin/semester-action', (req, res) => {
             
             plans.forEach(plan => {
                 let courses = [];
-                try { 
-                    courses = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; 
-                } catch(e) { courses = []; }
+                try { courses = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) { courses = []; }
                 
                 courses.forEach(c => {
-                    // order: student_id, section_id, course_id, semester_id, year_number, status
-                    enrollmentsData.push([plan.student_id, c.selected_section_id || null, c.course_id, semester_id, plan.year_number, 'undergoing']);
+                    enrollmentsData.push([plan.student_id, c.selected_section_id || null, c.course_id, semester_id, plan.year_number, 'undergoing', c.placeholder_id || null]);
                 });
             });
 
@@ -334,7 +321,7 @@ app.post('/admin/semester-action', (req, res) => {
             };
 
             if (enrollmentsData.length > 0) {
-                db.query('INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status) VALUES ?', [enrollmentsData], (err) => {
+                db.query('INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, placeholder_id) VALUES ?', [enrollmentsData], (err) => {
                     if (err) {
                         console.error("Bulk Enrollment Error:", err);
                         return res.status(500).json({error: err.message});
