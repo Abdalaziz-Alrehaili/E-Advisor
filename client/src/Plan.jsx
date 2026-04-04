@@ -20,6 +20,11 @@ function Plan({ user }) {
   const [activeElectiveCourse, setActiveElectiveCourse] = useState(null); 
   const [previewSectionId, setPreviewSectionId] = useState(null);
 
+  // Checkbox States for Rankings Filter
+  const [showCore, setShowCore] = useState(true);
+  const [showElective, setShowElective] = useState(false);
+  const [showFree, setShowFree] = useState(false);
+
   useEffect(() => {
     if (user && user.user_id) {
       fetch(`http://localhost:5000/curriculum-status/${user.user_id}`)
@@ -118,8 +123,8 @@ function Plan({ user }) {
 
   const isPlaceholder = (c) => {
     if (!c) return false;
-    const prefix = (c.course_prefix || '').toUpperCase();
-    const name = (c.course_name || '').toUpperCase();
+    const prefix = (c.course_prefix || c.prefix || '').toUpperCase();
+    const name = (c.course_name || c.name || '').toUpperCase();
     return prefix.includes('ELEC') || prefix.includes('FREE') || name.includes('ELECTIVE') || name.includes('FREE');
   };
 
@@ -192,7 +197,45 @@ function Plan({ user }) {
   }, {});
 
   const totalCredits = selectedCourses.reduce((sum, c) => sum + (Number(c.credits) ?? 0), 0);
-  const isInvalidLoad = totalCredits < 10 || totalCredits > 20;
+  
+  const isSummer = draftPlan?.semester_name?.toLowerCase().includes('summer');
+  const minCredits = isSummer ? 0 : 10;
+  const maxCredits = isSummer ? 9 : 20;
+  const isInvalidLoad = totalCredits < minCredits || totalCredits > maxCredits;
+
+  const getProgress = () => {
+      let elecComp = 0, freeComp = 0;
+      let elecPlan = 0, freePlan = 0;
+      let requiredElec = 0, requiredFree = 0;
+
+      curriculum.forEach(c => {
+          const isElec = (c.historical_placeholder_name || '').toUpperCase().includes('ELECTIVE') || (c.course_prefix || '').toUpperCase().includes('ELEC') || (c.course_name || '').toUpperCase().includes('ELECTIVE');
+          const isFree = (c.historical_placeholder_name || '').toUpperCase().includes('FREE') || (c.course_prefix || '').toUpperCase().includes('FREE') || (c.course_name || '').toUpperCase().includes('FREE');
+          
+          if (isElec) {
+              requiredElec += Number(c.credits) || 0;
+              if (c.status === 'completed' || c.status === 'undergoing') elecComp += Number(c.credits) || 0;
+          }
+          if (isFree) {
+              requiredFree += Number(c.credits) || 0;
+              if (c.status === 'completed' || c.status === 'undergoing') freeComp += Number(c.credits) || 0;
+          }
+      });
+
+      selectedCourses.forEach(sc => {
+          const placeholder = curriculum.find(c => c.course_id === sc.placeholder_id);
+          if (placeholder) {
+              const isElec = (placeholder.course_prefix || '').toUpperCase().includes('ELEC') || (placeholder.course_name || '').toUpperCase().includes('ELECTIVE');
+              const isFree = (placeholder.course_prefix || '').toUpperCase().includes('FREE') || (placeholder.course_name || '').toUpperCase().includes('FREE');
+              if (isElec) elecPlan += Number(sc.credits) || 0;
+              if (isFree) freePlan += Number(sc.credits) || 0;
+          }
+      });
+
+      return { elecComp, freeComp, elecPlan, freePlan, requiredElec, requiredFree };
+  };
+
+  const { elecComp, freeComp, elecPlan, freePlan, requiredElec, requiredFree } = getProgress();
 
   const getAvailableElectives = (targetPlaceholder) => {
       if (!targetPlaceholder) return [];
@@ -226,6 +269,26 @@ function Plan({ user }) {
           return true;
       });
   };
+
+  const filteredRecommendations = recommendations.filter(rec => {
+      if (isPlaceholder(rec)) return false;
+
+      const isCore = curriculum.some(core => core.course_id === rec.id && !isPlaceholder(core));
+      const prefix = (rec.prefix || '').toUpperCase();
+      
+      let courseType = 'free';
+      if (isCore) {
+          courseType = 'core';
+      } else if (prefix === 'CPIS') {
+          courseType = 'elective';
+      }
+
+      if (courseType === 'core' && showCore) return true;
+      if (courseType === 'elective' && showElective) return true;
+      if (courseType === 'free' && showFree) return true;
+
+      return false;
+  });
 
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'];
   const HOURS = Array.from({length: 17}, (_, i) => i + 7); 
@@ -322,29 +385,63 @@ function Plan({ user }) {
           {/* --- COLUMN 1: RECOMMENDATIONS (Fixed Height: 1100px) --- */}
           <div className="col-lg-4 d-flex flex-column">
             <div className="p-4 rounded-4 shadow-sm border bg-white d-flex flex-column w-100" style={{ height: '1100px' }}>
-              <h5 className="fw-bold mb-4" style={{ color: '#104929' }}>✨ E-Advisor Rankings</h5>
+              <h5 className="fw-bold mb-3" style={{ color: '#104929' }}>✨ E-Advisor Rankings</h5>
+              
+              <div className="d-flex justify-content-between align-items-center mb-3 px-2 small bg-light rounded p-2 border">
+                  <div className="form-check form-switch mb-0">
+                      <input className="form-check-input" type="checkbox" id="checkCore" checked={showCore} onChange={(e) => setShowCore(e.target.checked)} style={{ cursor: 'pointer' }} />
+                      <label className="form-check-label fw-bold" htmlFor="checkCore" style={{ cursor: 'pointer', color: '#104929' }}>Core</label>
+                  </div>
+                  <div className="form-check form-switch mb-0">
+                      <input className="form-check-input" type="checkbox" id="checkElec" checked={showElective} onChange={(e) => setShowElective(e.target.checked)} style={{ cursor: 'pointer' }} />
+                      <label className="form-check-label fw-bold" htmlFor="checkElec" style={{ cursor: 'pointer', color: '#d97706' }}>Elective</label>
+                  </div>
+                  <div className="form-check form-switch mb-0">
+                      <input className="form-check-input" type="checkbox" id="checkFree" checked={showFree} onChange={(e) => setShowFree(e.target.checked)} style={{ cursor: 'pointer' }} />
+                      <label className="form-check-label fw-bold" htmlFor="checkFree" style={{ cursor: 'pointer', color: '#0284c7' }}>Free</label>
+                  </div>
+              </div>
+
               <div className="fw-bold text-center mb-3 p-2 rounded-pill w-100" style={{ fontSize: '0.7rem', color: '#104929', backgroundColor: '#eef6f1', border: '1px solid #10492922', flexShrink: 0 }}>▲ MOST RECOMMENDED</div>
               
               <div className="flex-grow-1 custom-scrollbar" style={{ overflowY: 'auto', minHeight: 0, paddingRight: '10px' }}>
                 <div className="d-flex flex-column gap-3 pb-2">
-                  {recommendations.map((rec) => {
-                    const isSelected = selectedCourses.some(c => c.course_id === rec.id);
-                    const isDimmed = hoveredCourseId !== null && hoveredCourseId !== rec.id;
-                    const fullData = curriculum.find(c => c.course_id === rec.id) || { ...rec, course_id: rec.id };
+                  {filteredRecommendations.length > 0 ? (
+                      filteredRecommendations.map((rec) => {
+                        const isSelected = selectedCourses.some(c => c.course_id === rec.id);
+                        const isDimmed = hoveredCourseId !== null && hoveredCourseId !== rec.id;
+                        
+                        const fullData = curriculum.find(c => c.course_id === rec.id) || 
+                                         allCourses.find(c => c.course_id === rec.id) || 
+                                         { ...rec, course_id: rec.id, course_prefix: rec.prefix, course_number: rec.number, course_name: rec.name };
 
-                    return (
-                      <div key={rec.id} onClick={() => handleCourseClick(fullData)}
-                        style={{ 
-                          cursor: 'pointer', backgroundColor: isSelected ? '#f0fdf4' : '#ffffff',
-                          border: isSelected ? '2px solid #104929' : '1px solid #dee2e6', borderRadius: '15px',
-                          transition: 'all 0.3s ease', opacity: isDimmed ? 0.3 : 1, textAlign: 'center', padding: '1.5rem'
-                        }}>
-                        <div className="fw-bold mb-1" style={{ fontSize: '1.4rem', color: '#104929' }}>{rec.prefix}{rec.number}</div>
-                        <div className="text-muted small mb-2">{rec.name}</div>
-                        <span className="badge rounded-pill bg-light text-dark border px-3">{rec.credits} Credits</span>
+                        const isCore = curriculum.some(core => core.course_id === rec.id && !isPlaceholder(core));
+                        const prefix = (rec.prefix || '').toUpperCase();
+                        let badgeColor = isCore ? '#104929' : (prefix === 'CPIS' ? '#d97706' : '#0284c7');
+                        let typeLabel = isCore ? 'Core' : (prefix === 'CPIS' ? 'Elective' : 'Free');
+
+                        return (
+                          <div key={rec.id} onClick={() => handleCourseClick(fullData)}
+                            style={{ 
+                              cursor: 'pointer', backgroundColor: isSelected ? '#f0fdf4' : '#ffffff',
+                              border: isSelected ? `2px solid ${badgeColor}` : '1px solid #dee2e6', borderRadius: '15px',
+                              transition: 'all 0.3s ease', opacity: isDimmed ? 0.3 : 1, textAlign: 'center', padding: '1.5rem',
+                              position: 'relative'
+                            }}>
+                            <div className="position-absolute top-0 end-0 mt-2 me-2 badge rounded-pill" style={{backgroundColor: badgeColor, fontSize: '0.6rem'}}>
+                                {typeLabel}
+                            </div>
+                            <div className="fw-bold mb-1 mt-2" style={{ fontSize: '1.4rem', color: badgeColor }}>{rec.prefix}{rec.number}</div>
+                            <div className="text-muted small mb-2">{rec.name}</div>
+                            <span className="badge rounded-pill bg-light text-dark border px-3">{rec.credits} Credits</span>
+                          </div>
+                        );
+                      })
+                  ) : (
+                      <div className="text-center p-4 text-muted small border border-dashed rounded">
+                          No courses match your selected filters. Try checking more boxes above!
                       </div>
-                    );
-                  })}
+                  )}
                 </div>
               </div>
               
@@ -452,19 +549,48 @@ function Plan({ user }) {
           </div>
         </div>
 
-        {/* STICKY FOOTER */}
+        {/* --- DYNAMIC FOOTER --- */}
         <div className="mt-5 p-4 rounded-4 bg-white shadow-lg border d-flex justify-content-between align-items-center sticky-bottom" style={{ bottom: '20px', zIndex: 50 }}>
-          <div>
-            <h5 className="fw-bold mb-0">Total Credits: <span className={isInvalidLoad ? 'text-danger' : 'text-success'}>{totalCredits}</span></h5>
-            <small className="text-muted">Required: 10 - 20 Credits</small>
+          
+          <div className="d-flex gap-4 align-items-center">
+            {/* Semester Load */}
+            <div>
+              <h5 className="fw-bold mb-0">Total Credits: <span className={isInvalidLoad ? 'text-danger' : 'text-success'}>{totalCredits}</span></h5>
+              <small className="text-muted">min credits: {minCredits} - max credits: {maxCredits}</small>
+            </div>
+            
+            {/* Electives Progress */}
+            {requiredElec > 0 && (
+                <div className="border-start ps-4">
+                  <h6 className="fw-bold mb-0" style={{color: '#d97706'}}>
+                     Elective Credits: {elecComp + elecPlan} / {requiredElec}
+                  </h6>
+                  <small className="text-muted">
+                     {elecComp} Done + {elecPlan} Planned
+                  </small>
+                </div>
+            )}
+
+            {/* Free Course Progress */}
+            {requiredFree > 0 && (
+                <div className="border-start ps-4">
+                  <h6 className="fw-bold mb-0" style={{color: '#0284c7'}}>
+                     Free Credits: {freeComp + freePlan} / {requiredFree}
+                  </h6>
+                  <small className="text-muted">
+                     {freeComp} Done + {freePlan} Planned
+                  </small>
+                </div>
+            )}
           </div>
+
           <button 
             className="btn btn-lg px-5 py-3 fw-bold rounded-pill text-white shadow"
             disabled={isInvalidLoad || loading}
             onClick={handleConfirmPlan}
             style={{ backgroundColor: isInvalidLoad ? '#6c757d' : '#104929', border: 'none' }}
           >
-            {loading ? 'Saving...' : (totalCredits < 10 ? 'Under Min Credits' : (totalCredits > 20 ? 'Over Max Credits' : 'Confirm Draft Plan'))}
+            {loading ? 'Saving...' : (totalCredits < minCredits ? 'Under Min Credits' : (totalCredits > maxCredits ? 'Over Max Credits' : 'Confirm Draft Plan'))}
           </button>
         </div>
       </div>
@@ -522,7 +648,6 @@ function Plan({ user }) {
                 <>
                     {/* SWIMLANES */}
                     {(() => {
-                        // NEW INTELLIGENCE: Identifies what is a core course vs an elective for this program
                         const isCoreCourse = (id) => curriculum.some(core => core.course_id === id && !isPlaceholder(core) && !core.historical_placeholder_name);
 
                         const reqIds = prerequisites.filter(p => p.course_id === evaluatedCourse.course_id).map(p => p.prereq_id);
