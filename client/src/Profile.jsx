@@ -5,6 +5,14 @@ function Profile({ user }) {
   const [grades, setGrades] = useState([]);
   const [draftPlan, setDraftPlan] = useState(null);
   const [major, setMajor] = useState('');
+  
+  // NEW: State for Supervisor and Chat Notifications
+  const [supervisorInfo, setSupervisorInfo] = useState(null);
+  
+  // Modal State for section details
+  const [showModal, setShowModal] = useState(false);
+  const [selectedSemDetails, setSelectedSemDetails] = useState([]);
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
   const fetchDraft = () => {
     fetch(`http://localhost:5000/my-draft/${user.user_id}`)
@@ -14,6 +22,21 @@ function Profile({ user }) {
           setDraftPlan(data);
       })
       .catch(err => { console.error("Draft error:", err); setDraftPlan(null); });
+  };
+
+  const fetchSemDetails = (semesterId) => {
+    setLoadingDetails(true);
+    setShowModal(true);
+    fetch(`http://localhost:5000/enrollment-details/${user.user_id}/${semesterId}`)
+      .then(res => res.json())
+      .then(data => {
+          setSelectedSemDetails(data);
+          setLoadingDetails(false);
+      })
+      .catch(err => {
+          console.error("Details fetch error:", err);
+          setLoadingDetails(false);
+      });
   };
 
   useEffect(() => {
@@ -34,6 +57,12 @@ function Profile({ user }) {
             if (data && data.major) setMajor(data.major);
         })
         .catch(err => console.error("Major fetch error:", err));
+
+      // NEW: Fetch Supervisor Info & Unread Message Count
+      fetch(`http://localhost:5000/api/student/${user.user_id}/supervisor-info`)
+        .then(res => res.json())
+        .then(data => setSupervisorInfo(data))
+        .catch(err => console.error("Supervisor fetch error:", err));
 
       // Fetch Draft
       fetchDraft();
@@ -67,33 +96,66 @@ function Profile({ user }) {
   };
 
   const safeGrades = Array.isArray(grades) ? grades : [];
-  
-  // Calculate total credits done for the new header
-  const totalCreditsDone = safeGrades.reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
+  const totalCreditsDone = safeGrades.filter(c => c.status === 'completed').reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
+  const isCurrentlyUndergoing = safeGrades.some(c => c.status === 'undergoing');
 
   const yearData = safeGrades.reduce((acc, current) => {
     const year = current.year_number;
     if (!acc[year]) acc[year] = {};
-    const semKey = current.ideal_semester; 
+    
+    let semKey = current.ideal_semester; 
+    if (current.actual_rule_id === 1) semKey = '1';
+    else if (current.actual_rule_id === 2) semKey = '2';
+    else if (current.actual_rule_id === 3) semKey = 'Summer';
+
     if (!acc[year][semKey]) acc[year][semKey] = { 
       name: `Year ${year} - ${semKey === 'Summer' ? 'Summer' : 'Sem ' + semKey}`, 
-      courses: [] 
+      courses: [],
+      semester_id: current.semester_id 
     };
     acc[year][semKey].courses.push(current);
     return acc;
   }, {});
 
-  const isRegOpen = draftPlan !== null;
-  const regYear = isRegOpen ? (draftPlan.year_number || 1) : null;
   const regSemName = draftPlan?.semester_name || "Upcoming Semester";
-  
   let regSemKey = '1'; 
-  if (isRegOpen) {
+  if (draftPlan) {
       const lowerName = regSemName.toLowerCase();
       if (lowerName.includes('second')) regSemKey = '2';
       else if (lowerName.includes('summer')) regSemKey = 'Summer';
   }
 
+  let maxYear = 0;
+  let maxSemRule = 0; 
+  
+  safeGrades.forEach(c => {
+      let rule = c.actual_rule_id || 1;
+      if (c.year_number > maxYear) {
+          maxYear = c.year_number;
+          maxSemRule = rule;
+      } else if (c.year_number === maxYear && rule > maxSemRule) {
+          maxSemRule = rule;
+      }
+  });
+
+  let regSemRule = 1;
+  if (regSemKey === '2') regSemRule = 2;
+  if (regSemKey === 'Summer') regSemRule = 3;
+
+  let isLogicalNextSemester = true;
+  if (maxYear > 0) {
+      if (maxSemRule === 3) {
+          isLogicalNextSemester = (regSemRule === 1);
+      } else if (maxSemRule === 2) {
+          isLogicalNextSemester = (regSemRule === 3 || regSemRule === 1);
+      } else if (maxSemRule === 1) {
+          isLogicalNextSemester = (regSemRule === 2);
+      }
+  }
+
+  const isRegOpen = draftPlan !== null && !isCurrentlyUndergoing && isLogicalNextSemester;
+  
+  const regYear = isRegOpen ? (draftPlan.year_number || 1) : null;
   const allYearKeys = Array.from(new Set([
     ...Object.keys(yearData), 
     regYear ? regYear.toString() : null
@@ -101,12 +163,22 @@ function Profile({ user }) {
 
   return (
     <div className="full-width-white-box">
+      
+      <style>{`
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        @keyframes pulseBlue { 
+          0% { box-shadow: 0 0 0 0 rgba(13, 110, 253, 0.4); } 
+          70% { box-shadow: 0 0 0 8px rgba(13, 110, 253, 0); } 
+          100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, 0); } 
+        }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+        .details-modal { background: white; padding: 40px; border-radius: 15px; width: 850px; max-height: 85vh; overflow-y: auto; border-top: 10px solid #0d6efd; position: relative; }
+      `}</style>
+
       <div className="centered-content-container">
         
-        {/* NEW TRANSCRIPT-STYLE HEADER */}
         <div className="profile-info-header" style={{ width: '75vw', margin: '0 auto', borderBottom: '2px solid rgba(16, 73, 41, 0.15)', paddingBottom: '45px', marginBottom: '50px' }}>
           
-          {/* Avatar and Name */}
           <div style={{ width: '100%', textAlign: 'center', marginBottom: '40px' }}>
             <div 
               className="shadow-sm" 
@@ -130,7 +202,6 @@ function Profile({ user }) {
             </h1>
           </div>
           
-          {/* CSS GRID FOR PERFECT VERTICAL ALIGNMENT */}
           <div style={{ 
             display: 'grid', 
             gridTemplateColumns: '1fr 1fr', 
@@ -142,16 +213,8 @@ function Profile({ user }) {
             paddingTop: '10px'
           }}>
             
-            {/* The absolute centered divider line */}
-            <div style={{ 
-              position: 'absolute', 
-              top: 0, 
-              bottom: 0, 
-              left: '50%', 
-              borderLeft: '4px solid #bce0c8' 
-            }}></div>
+            <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', borderLeft: '4px solid #bce0c8' }}></div>
 
-            {/* ROW 1: GPA (Left) & Major (Right) */}
             <div style={{ textAlign: 'left', paddingRight: '50px' }}>
               <h3 className="fw-bold m-0" style={{ color: '#104929' }}>
                 GPA: {calculateGPA(grades)}
@@ -164,30 +227,42 @@ function Profile({ user }) {
               </h3>
             </div>
 
-            {/* ROW 2: Credits (Left) & Supervisor (Right) */}
             <div style={{ textAlign: 'left', paddingRight: '50px' }}>
               <h3 className="fw-bold m-0" style={{ color: '#104929' }}>
                 Credits Completed: {totalCreditsDone}
               </h3>
             </div>
             
+            {/* UPGRADED: Dynamic Supervisor Line with Chat Button & Badge */}
             <div style={{ textAlign: 'left', paddingLeft: '50px' }}>
-              <h3 className="fw-bold m-0" style={{ color: '#104929' }}>
-                Supervisor: 
+              <h3 className="fw-bold m-0 d-flex align-items-center flex-wrap gap-3" style={{ color: '#104929' }}>
+                <span>Supervisor: {supervisorInfo ? `${supervisorInfo.first_name} ${supervisorInfo.last_name}` : 'Loading...'}</span>
+                
+                {supervisorInfo && (
+                  <Link 
+                    to="/chat" 
+                    className="btn btn-sm rounded-pill text-white fw-bold position-relative d-flex align-items-center shadow-sm transition-all"
+                    style={{ backgroundColor: '#104929', border: 'none', padding: '6px 16px' }}
+                  >
+                    <i className="bi bi-chat-text-fill me-2"></i> Message
+                    {supervisorInfo.unread_count > 0 && (
+                      <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-light" style={{ fontSize: '0.7rem' }}>
+                        {supervisorInfo.unread_count}
+                      </span>
+                    )}
+                  </Link>
+                )}
               </h3>
             </div>
 
           </div>
-
         </div>
 
-        {/* EMPTY STATE */}
         {allYearKeys.length === 0 && !isRegOpen ? (
             <div className="text-center p-5 text-muted">
                 <h4>No academic records found.</h4>
             </div>
         ) : (
-          /* UNIFIED TRANSCRIPT GRID (Columns with full vertical lines) */
           <div style={{ 
             display: 'grid', 
             gridTemplateColumns: 'repeat(3, 1fr)', 
@@ -195,7 +270,6 @@ function Profile({ user }) {
             width: '100%'
           }}>
             
-            {/* TRANSCRIPT COLUMN HEADERS */}
             {['First Semester', 'Second Semester', 'Summer Semester'].map((title, idx) => (
               <div key={`header-${idx}`} className="text-center" style={{ 
                 padding: '20px 15px', 
@@ -210,11 +284,16 @@ function Profile({ user }) {
               </div>
             ))}
 
-            {/* YEAR DATA */}
             {allYearKeys.map(yearNum => {
               return ['1', '2', 'Summer'].map((slot, idx) => {
                 const semData = yearData[yearNum]?.[slot];
                 const isRegistrationSlot = isRegOpen && Number(yearNum) === Number(regYear) && slot === regSemKey;
+
+                const isUndergoing = semData ? semData.courses.some(c => c.status === 'undergoing') : false;
+                
+                const themeColor = isUndergoing ? '#0d6efd' : '#104929'; 
+                const cellBgColor = isRegistrationSlot ? '#fdfdf8' : (isUndergoing ? '#fdfdf8' : 'transparent');
+                const borderAccent = isUndergoing ? '#0d6efd' : (isRegistrationSlot && !semData ? '#8c6b41' : '#1a9044');
 
                 const cellStyle = {
                   padding: '30px 20px',
@@ -223,32 +302,48 @@ function Profile({ user }) {
                   borderBottom: '3px solid #bce0c8',
                   display: 'flex',
                   flexDirection: 'column',
-                  backgroundColor: isRegistrationSlot ? '#fdfdf8' : 'transparent'
+                  backgroundColor: cellBgColor,
+                  transition: 'background-color 0.3s ease'
                 };
 
                 if (semData) {
                   const totalSemCredits = semData.courses.reduce((sum, c) => sum + (Number(c.credits) || 0), 0);
                   const currentWeight = (Number(yearNum) * 10) + (slot === '1' ? 1 : slot === '2' ? 2 : 3);
+                  
                   const cumulativeCourses = safeGrades.filter(c => {
-                    const cWeight = (Number(c.year_number) * 10) + (c.ideal_semester === '1' ? 1 : c.ideal_semester === '2' ? 2 : 3);
-                    return cWeight <= currentWeight;
+                    let cSemKey = c.ideal_semester; 
+                    if (c.actual_rule_id === 1) cSemKey = '1';
+                    else if (c.actual_rule_id === 2) cSemKey = '2';
+                    else if (c.actual_rule_id === 3) cSemKey = 'Summer';
+
+                    const cWeight = (Number(c.year_number) * 10) + (cSemKey === '1' ? 1 : cSemKey === '2' ? 2 : 3);
+                    return cWeight <= currentWeight && (c.status === 'completed' || c.status === 'undergoing'); 
                   });
+
                   const cumCredits = cumulativeCourses.reduce((sum, c) => sum + (Number(c.credits) || 0), 0);
                   const cumGPA = calculateGPA(cumulativeCourses);
 
+                  const hasDraftedCourses = draftPlan?.courses && draftPlan.courses.length > 0;
+
                   return (
                     <div key={`${yearNum}-${slot}`} style={cellStyle}>
-                      <div className="semester-column flex-grow-1" style={{ borderLeft: '6px solid #1a9044', paddingLeft: '15px' }}>
+                      <div className="semester-column flex-grow-1 d-flex flex-column" style={{ borderLeft: `6px solid ${borderAccent}`, paddingLeft: '15px' }}>
                         
                         <div className="mb-4 border-bottom pb-3">
-                          <h4 className="fw-bold mb-3" style={{ color: '#104929' }}>
+                          <h4 className="fw-bold mb-3 d-flex align-items-center gap-2" style={{ color: themeColor }}>
                             {semData.name}
+                            
+                            {isUndergoing && (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', borderRadius: '50%', backgroundColor: themeColor, color: 'white', animation: 'pulseBlue 2s infinite' }}>
+                                    <i className="bi bi-gear-fill" style={{ fontSize: '1rem', animation: 'spin 3s linear infinite' }}></i>
+                                </span>
+                            )}
                           </h4>
-                          <h5 className="fw-bold m-0 mb-2" style={{ color: '#104929' }}>
-                            Semester Credits: {totalSemCredits} <span className="mx-2">|</span> Semester GPA: {calculateGPA(semData.courses)}
+                          <h5 className="fw-bold m-0 mb-2" style={{ color: themeColor }}>
+                            Semester Credits: {totalSemCredits} <span className="mx-2">|</span> Semester GPA: {isUndergoing ? '--' : calculateGPA(semData.courses)}
                           </h5>
-                          <h5 className="fw-bold m-0" style={{ color: '#104929' }}>
-                            Cumulative Credits: {cumCredits} <span className="mx-2">|</span> Cumulative GPA: {cumGPA}
+                          <h5 className="fw-bold m-0" style={{ color: themeColor }}>
+                            Cumulative Credits: {cumCredits} <span className="mx-2">|</span> Cumulative GPA: {isUndergoing ? '--' : cumGPA}
                           </h5>
                         </div>
                         
@@ -261,12 +356,71 @@ function Profile({ user }) {
                                   <td className="fw-bold text-muted pe-1" style={{ width: '25%' }}>{courseCode}</td>
                                   <td className="text-capitalize pe-1" style={{ width: '45%' }}>{course.course_name ? course.course_name.toLowerCase() : ''}</td>
                                   <td className="text-muted pe-1" style={{ width: '20%' }}>{course.credits} Cr.</td>
-                                  <td className="text-end fw-bold" style={{ width: '10%', color: '#1a9044' }}>{course.grade || '--'}</td>
+                                  <td className="text-end fw-bold" style={{ width: '10%', color: themeColor }}>
+                                      {course.status === 'undergoing' ? (
+                                          <span className="badge rounded-pill" style={{ backgroundColor: '#cfe2ff', color: '#0a58ca', fontSize: '0.7rem' }}>In Progress</span>
+                                      ) : (
+                                          course.grade || '--'
+                                      )}
+                                  </td>
                                 </tr>
                               );
                             })}
                           </tbody>
                         </table>
+
+                        {isUndergoing && (
+                            <div className="mt-auto pt-4 text-center">
+                                <button 
+                                    className="btn fw-bold px-4 py-2 shadow-sm" 
+                                    style={{ backgroundColor: '#0d6efd', color: 'white', borderRadius: '8px', border: 'none' }}
+                                    onClick={() => fetchSemDetails(semData.semester_id)}
+                                >
+                                  Details
+                                </button>
+                            </div>
+                        )}
+
+                        {isRegistrationSlot && (
+                          <div className="mt-4 pt-4 border-top border-warning flex-grow-1 d-flex flex-column">
+                            <h5 className="fw-bold mb-3 text-warning" style={{ color: '#8c6b41' }}>
+                              Registration Open ({regSemName})
+                            </h5>
+                            
+                            <div className="flex-grow-1">
+                              {hasDraftedCourses ? (
+                                <table className="table table-sm table-borderless align-middle mb-0" style={{ fontSize: '0.85rem' }}>
+                                  <tbody>
+                                    {draftPlan.courses.map((course, cIdx) => {
+                                      const courseCode = course.course_prefix ? `${course.course_prefix}-${course.course_number}` : `Course ${course.course_id}`;
+                                      return (
+                                        <tr key={`draft-${cIdx}`}>
+                                          <td className="fw-bold text-muted pe-1" style={{ width: '25%' }}>{courseCode}</td>
+                                          <td className="text-capitalize pe-1" style={{ width: '45%' }}>{course.course_name ? course.course_name.toLowerCase() : ''}</td>
+                                          <td className="text-muted pe-1" style={{ width: '20%' }}>{course.credits} Cr.</td>
+                                          <td className="text-end fw-bold text-warning" style={{ width: '10%' }}>Draft</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              ) : (
+                                <p className="text-muted small">Build your additional study plan for this semester.</p>
+                              )}
+                            </div>
+
+                            <div className="mt-3 text-center">
+                              {hasDraftedCourses ? (
+                                <div className="d-flex justify-content-center gap-2">
+                                  <Link to="/plan" className="btn btn-outline-dark btn-sm fw-bold px-3">Edit plan</Link>
+                                  <button onClick={handleDeletePlan} className="btn btn-outline-danger btn-sm fw-bold px-3">Delete ✖</button>
+                                </div>
+                              ) : (
+                                <Link to="/plan" className="btn btn-outline-dark btn-sm fw-bold px-3">Build semester plan</Link>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -280,10 +434,10 @@ function Profile({ user }) {
 
                   return (
                     <div key={`${yearNum}-${slot}`} style={cellStyle}>
-                      <div className="semester-column registration-active-box flex-grow-1 d-flex flex-column" style={{ borderLeft: '6px solid #8c6b41', paddingLeft: '15px' }}>
+                      <div className="semester-column registration-active-box flex-grow-1 d-flex flex-column" style={{ borderLeft: `6px solid ${borderAccent}`, paddingLeft: '15px' }}>
                         
                         <div className="mb-4 border-bottom border-warning pb-3">
-                          <h4 className="fw-bold mb-2" style={{ color: '#8c6b41' }}>
+                          <h4 className="fw-bold mb-2" style={{ color: borderAccent }}>
                             {regSemName}
                           </h4>
                           {formattedDate && (
@@ -358,6 +512,49 @@ function Profile({ user }) {
           </div>
         )}
       </div>
+
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="details-modal shadow-lg" onClick={e => e.stopPropagation()}>
+            <div className="d-flex justify-content-between align-items-center mb-4">
+              <h2 className="fw-bold m-0" style={{ color: '#0d6efd' }}>Semester Schedule</h2>
+              <button className="btn-close" onClick={() => setShowModal(false)}></button>
+            </div>
+
+            {loadingDetails ? (
+              <div className="text-center p-5"><div className="spinner-border text-primary" role="status"></div><p className="mt-2">Loading schedule...</p></div>
+            ) : (
+              <div className="table-responsive">
+                <table className="table align-middle">
+                  <thead className="table-light">
+                    <tr>
+                      <th>Course</th>
+                      <th>Professor</th>
+                      <th>Days</th>
+                      <th>Time</th>
+                      <th>Room</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedSemDetails.map((item, i) => (
+                      <tr key={i}>
+                        <td className="fw-bold">{item.course_prefix}-{item.course_number}</td>
+                        <td>{item.professor_name || 'TBA'}</td>
+                        <td><span className="badge bg-primary px-3">{item.days}</span></td>
+                        <td>{item.start_time?.substring(0,5)} - {item.end_time?.substring(0,5)}</td>
+                        <td>{item.room_number}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="text-end mt-4">
+              <button className="btn btn-secondary fw-bold px-4" onClick={() => setShowModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

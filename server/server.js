@@ -2,12 +2,22 @@ const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
 const crypto = require('crypto');
+const http = require('http'); 
+const { Server } = require('socket.io'); 
 require('dotenv').config();
 const { buildCurriculumGraph } = require('./graphUtils');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*", 
+        methods: ["GET", "POST"]
+    }
+});
 
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'db',
@@ -19,7 +29,6 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
-// --- AUTHENTICATION ROUTE ---
 const hashPassword = (password) => crypto.createHash('sha256').update(password).digest('hex');
 
 app.post('/login', (req, res) => {
@@ -38,48 +47,219 @@ app.post('/login', (req, res) => {
     });
 });
 
-// --- DATA ROUTES ---
+app.get('/api/supervisor/students/:user_id', (req, res) => {
+    const supervisorUserId = req.params.user_id;
+
+    // FIXED: The unread_count subquery now correctly looks for messages RECEIVED by the supervisor and SENT by the student.
+    const sql = `
+        SELECT 
+            st.student_id,
+            u.user_id,
+            u.first_name, 
+            u.last_name, 
+            st.admission_year,
+            p.total_credits_required,
+            p.duration_years,
+            IFNULL((SELECT SUM(c.credits) FROM enrollments e JOIN courses c ON e.course_id = c.course_id WHERE e.student_id = st.student_id AND e.status = 'completed'), 0) AS credits_completed,
+            IFNULL((SELECT ROUND(AVG(
+                CASE e.grade
+                    WHEN 'A+' THEN 5.0 WHEN 'A' THEN 4.75 WHEN 'B+' THEN 4.5 WHEN 'B' THEN 4.0
+                    WHEN 'C+' THEN 3.5 WHEN 'C' THEN 3.0 WHEN 'D+' THEN 2.5 WHEN 'D' THEN 2.0 ELSE 0
+                END
+            ), 2) FROM enrollments e WHERE e.student_id = st.student_id AND e.status = 'completed' AND e.grade IS NOT NULL), 0.00) AS gpa,
+            (SELECT COUNT(*) FROM messages m WHERE m.receiver_id = ? AND m.sender_id = u.user_id AND m.is_read = FALSE) AS unread_count
+        FROM students st
+        JOIN users u ON st.user_id = u.user_id
+        JOIN programs p ON st.program_id = p.program_id
+        WHERE st.supervisor_id = ?
+    `;
+
+    db.query(sql, [supervisorUserId, supervisorUserId], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+app.get('/api/student/:user_id/supervisor-info', (req, res) => {
+    const studentUserId = req.params.user_id;
+    const sql = `
+        SELECT 
+            sup.user_id AS supervisor_id,
+            sup.first_name,
+            sup.last_name,
+            (SELECT COUNT(*) FROM messages m WHERE m.receiver_id = ? AND m.sender_id = sup.user_id AND m.is_read = FALSE) AS unread_count
+        FROM students st
+        JOIN users sup ON st.supervisor_id = sup.user_id
+        WHERE st.user_id = ?
+    `;
+    db.query(sql, [studentUserId, studentUserId], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results.length > 0 ? results[0] : null);
+    });
+});
+
+app.post('/api/chat/mark-read', (req, res) => {
+    const { sender_id, receiver_id } = req.body;
+    const sql = `UPDATE messages SET is_read = TRUE WHERE sender_id = ? AND receiver_id = ?`;
+    db.query(sql, [sender_id, receiver_id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
+app.get('/api/chat/history/:user1/:user2', (req, res) => {
+    const { user1, user2 } = req.params;
+    const sql = `
+        SELECT * FROM messages 
+        WHERE (sender_id = ? AND receiver_id = ?) 
+           OR (sender_id = ? AND receiver_id = ?)
+        ORDER BY timestamp ASC
+    `;
+    db.query(sql, [user1, user2, user2, user1], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+io.on('connection', (socket) => {
+    console.log(`User connected: ${socket.id}`);
+
+    socket.on('join_user_room', (userId) => {
+        socket.join(`user_${userId}`);
+        console.log(`User ${userId} joined their personal room.`);
+    });
+
+    socket.on('send_message', (data) => {
+        const { sender_id, receiver_id, content } = data;
+        
+        const sql = `INSERT INTO messages (sender_id, receiver_id, content) VALUES (?, ?, ?)`;
+        db.query(sql, [sender_id, receiver_id, content], (err, result) => {
+            if (err) {
+                console.error("Error saving message:", err);
+                return;
+            }
+            
+            const newMessage = {
+                message_id: result.insertId,
+                sender_id,
+                receiver_id,
+                content,
+                timestamp: new Date().toISOString(),
+                is_read: 0
+            };
+
+            io.to(`user_${receiver_id}`).emit('receive_message', newMessage);
+            io.to(`user_${sender_id}`).emit('receive_message', newMessage);
+        });
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`User disconnected: ${socket.id}`);
+    });
+});
+
 app.get('/students', (req, res) => {
     const sql = `SELECT s.student_id as id, u.first_name, u.last_name, u.username as email FROM students s JOIN users u ON s.user_id = u.user_id`;
-    db.query(sql, (err, results) => res.json(results.map(r => ({ id: r.id, name: `${r.first_name} ${r.last_name}`, email: r.email }))));
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results.map(r => ({ id: r.id, name: `${r.first_name} ${r.last_name}`, email: r.email })));
+    });
 });
 
 app.get('/courses', (req, res) => {
-    db.query('SELECT * FROM courses', (err, results) => res.json(results));
+    db.query('SELECT * FROM courses', (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+app.get('/sections', (req, res) => {
+    db.query('SELECT * FROM sections', (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
 app.get('/curriculum-status/:user_id', (req, res) => {
-    const sql = `SELECT c.course_id, c.course_name, c.credits, e.status, e.grade, pr.ideal_year, pr.ideal_semester FROM program_requirements pr JOIN courses c ON pr.course_id = c.course_id JOIN students s ON s.program_id = pr.program_id AND s.user_id = ? LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.student_id = s.student_id ORDER BY pr.ideal_year ASC, pr.ideal_semester ASC`;
-    db.query(sql, [req.params.user_id], (err, results) => res.json(results));
+    const sql = `
+        SELECT 
+            IFNULL(real_c.course_id, c.course_id) AS course_id, 
+            IFNULL(real_c.course_name, c.course_name) AS course_name, 
+            IFNULL(real_c.course_prefix, c.course_prefix) AS course_prefix, 
+            IFNULL(real_c.course_number, c.course_number) AS course_number, 
+            IFNULL(real_c.credits, c.credits) AS credits, 
+            e.status, 
+            e.grade, 
+            pr.ideal_year, 
+            pr.ideal_semester,
+            CASE WHEN e.placeholder_id IS NOT NULL THEN c.course_name ELSE NULL END AS historical_placeholder_name
+        FROM program_requirements pr 
+        JOIN courses c ON pr.course_id = c.course_id 
+        JOIN students s ON s.program_id = pr.program_id AND s.user_id = ? 
+        LEFT JOIN enrollments e ON (c.course_id = e.course_id OR c.course_id = e.placeholder_id) AND e.student_id = s.student_id 
+        LEFT JOIN courses real_c ON e.course_id = real_c.course_id AND e.placeholder_id IS NOT NULL
+        ORDER BY pr.ideal_year ASC, pr.ideal_semester ASC
+    `;
+    db.query(sql, [req.params.user_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
 app.get('/semesters', (req, res) => {
-    db.query('SELECT s.semester_id, s.semester_name, r.semester_type, r.max_credits FROM semesters s JOIN semester_rules r ON s.rule_id = r.rule_id', (err, results) => res.json(results));
+    db.query('SELECT s.semester_id, s.semester_name, r.semester_type, r.max_credits, r.min_credits FROM semesters s JOIN semester_rules r ON s.rule_id = r.rule_id', (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
-// FIX: Added c.course_prefix and c.course_number to the SELECT query
 app.get('/my-grades/:user_id', (req, res) => {
-    const sql = `SELECT c.course_id, c.course_prefix, c.course_number, c.course_name, e.grade, e.status, c.credits, e.year_number, pr.ideal_semester, CONCAT('Year ', e.year_number, ' - Semester ', pr.ideal_semester) AS display_term FROM enrollments e JOIN courses c ON e.course_id = c.course_id JOIN students s ON e.student_id = s.student_id JOIN program_requirements pr ON c.course_id = pr.course_id AND s.program_id = pr.program_id WHERE s.user_id = ? ORDER BY e.year_number ASC, pr.ideal_semester ASC`;
-    db.query(sql, [req.params.user_id], (err, results) => res.json(results));
+    const sql = `
+        SELECT 
+            c.course_id, c.course_prefix, c.course_number, c.course_name, 
+            e.grade, e.status, c.credits, e.year_number, 
+            pr.ideal_semester, e.semester_id,
+            sem.rule_id AS actual_rule_id
+        FROM enrollments e 
+        JOIN courses c ON e.course_id = c.course_id 
+        JOIN students s ON e.student_id = s.student_id 
+        JOIN program_requirements pr ON (c.course_id = pr.course_id OR e.placeholder_id = pr.course_id) AND s.program_id = pr.program_id 
+        LEFT JOIN semesters sem ON e.semester_id = sem.semester_id
+        WHERE s.user_id = ? 
+        ORDER BY e.year_number ASC, actual_rule_id ASC, pr.ideal_semester ASC
+    `;
+    db.query(sql, [req.params.user_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
 app.get('/my-major/:user_id', (req, res) => {
-    const sql = `
-        SELECT p.program_name 
-        FROM students s 
-        JOIN programs p ON s.program_id = p.program_id 
-        WHERE s.user_id = ?
-    `;
+    const sql = `SELECT p.program_name FROM students s JOIN programs p ON s.program_id = p.program_id WHERE s.user_id = ?`;
     db.query(sql, [req.params.user_id], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ major: results.length > 0 ? results[0].program_name : 'Unknown Major' });
     });
 });
 
-// --- FETCH DRAFT PLAN ROUTE ---
+app.get('/enrollment-details/:user_id/:semester_id', (req, res) => {
+    const { user_id, semester_id } = req.params;
+    const sql = `
+        SELECT c.course_prefix, c.course_number, c.course_name, s.professor_name, s.days, s.start_time, s.end_time, s.room_number
+        FROM enrollments e
+        JOIN courses c ON e.course_id = c.course_id
+        JOIN sections s ON e.section_id = s.section_id
+        JOIN students st ON e.student_id = st.student_id
+        WHERE st.user_id = ? AND e.semester_id = ?
+    `;
+    db.query(sql, [user_id, semester_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
 app.get('/my-draft/:user_id', (req, res) => {
     const { user_id } = req.params;
-
     db.query('SELECT semester_id, semester_name, registration_close_date FROM semesters WHERE is_registration_open = TRUE LIMIT 1', (err, semResults) => {
         if (err) return res.status(500).json({ error: err.message });
         const openSemester = semResults[0];
@@ -90,27 +270,25 @@ app.get('/my-draft/:user_id', (req, res) => {
             if (studentResults.length === 0) return res.json(null); 
 
             const { student_id, max_year } = studentResults[0];
-
             const sqlDraft = `SELECT bs.selected_courses_json, bs.status, bs.year_number, s.semester_name, s.semester_id, s.registration_close_date FROM build_semester bs JOIN semesters s ON bs.semester_id = s.semester_id WHERE bs.student_id = ?`;
+            
             db.query(sqlDraft, [student_id], (err, draftResults) => {
                 if (err) return res.status(500).json({ error: err.message });
 
                 if (draftResults.length > 0) {
                     const draft = draftResults[0];
-                    let courseIds;
-                    try { courseIds = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) { courseIds = []; }
-                    
-                    if (!courseIds || courseIds.length === 0) return res.json({ ...draft, courses: [] });
+                    let coursesArr;
+                    try { coursesArr = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) { coursesArr = []; }
+                    if (!coursesArr || coursesArr.length === 0) return res.json({ ...draft, courses: [] });
 
-                    // FIX: Added course_prefix and course_number here too
-                    db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [courseIds], (err, courses) => {
+                    const ids = coursesArr.map(c => c.course_id || c);
+                    db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [ids], (err, courses) => {
                         if (err) return res.status(500).json({ error: err.message });
                         res.json({ ...draft, courses });
                     });
                 } else if (openSemester) {
                     const isFirstSem = openSemester.semester_name.toLowerCase().includes('first') || openSemester.semester_name.includes('1');
                     const academicYear = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
-
                     res.json({
                         semester_name: openSemester.semester_name,
                         semester_id: openSemester.semester_id,
@@ -135,20 +313,28 @@ app.post('/save-plan', (req, res) => {
         if (err || semResult.length === 0) return res.status(403).json({ error: "Registration is currently closed." });
 
         const open_semester_id = semResult[0].semester_id;
-        const yearMatch = semResult[0].semester_name.match(/\d{4}/);
-        const dynamic_year_number = yearMatch ? parseInt(yearMatch[0]) : new Date().getFullYear();
+        const open_semester_name = semResult[0].semester_name;
 
-        db.query('SELECT student_id FROM students WHERE user_id = ?', [user_id], (err, studentResult) => {
+        db.query('SELECT s.student_id, IFNULL(MAX(e.year_number), 0) as max_year FROM students s LEFT JOIN enrollments e ON s.student_id = e.student_id WHERE s.user_id = ? GROUP BY s.student_id', [user_id], (err, studentResult) => {
             if (err || studentResult.length === 0) return res.status(500).json({ error: "Student not found" });
+            
             const student_id = studentResult[0].student_id;
-            const courseIds = selectedCourses.map(course => course.course_id);
-            const selected_courses_json = JSON.stringify(courseIds);
+            const max_year = studentResult[0].max_year > 10 ? 0 : studentResult[0].max_year; 
+            const isFirstSem = open_semester_name.toLowerCase().includes('first') || open_semester_name.includes('1');
+            const dynamic_year_number = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
+            const selected_courses_json = JSON.stringify(selectedCourses);
 
             db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
                 if (draftResult.length > 0) {
-                    db.query('UPDATE build_semester SET selected_courses_json = ?, semester_id = ?, year_number = ?, status = "draft", updated_at = NOW() WHERE student_id = ?', [selected_courses_json, open_semester_id, dynamic_year_number, student_id], () => res.json({ success: true }));
+                    db.query('UPDATE build_semester SET selected_courses_json = ?, semester_id = ?, year_number = ?, status = "draft", updated_at = NOW() WHERE student_id = ?', [selected_courses_json, open_semester_id, dynamic_year_number, student_id], (err) => {
+                        if (err) return res.status(500).json({ error: err.message });
+                        res.json({ success: true });
+                    });
                 } else {
-                    db.query('INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")', [student_id, open_semester_id, dynamic_year_number, selected_courses_json], () => res.json({ success: true }));
+                    db.query('INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")', [student_id, open_semester_id, dynamic_year_number, selected_courses_json], (err) => {
+                        if (err) return res.status(500).json({ error: err.message });
+                        res.json({ success: true });
+                    });
                 }
             });
         });
@@ -159,7 +345,6 @@ app.delete('/delete-plan/:user_id', (req, res) => {
     db.query('SELECT student_id FROM students WHERE user_id = ?', [req.params.user_id], (err, studentResult) => {
         if (err || studentResult.length === 0) return res.status(500).json({ error: "Student not found" });
         const student_id = studentResult[0].student_id;
-        
         db.query('DELETE FROM build_semester WHERE student_id = ?', [student_id], (err) => {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ success: true });
@@ -224,54 +409,88 @@ app.post('/admin/semester-action', (req, res) => {
             });
         });
     } else if (action === 'close') {
-        db.query('UPDATE semesters SET is_registration_open = 0, is_completed = TRUE WHERE semester_id = ?', [semester_id], (err) => {
+        db.query('SELECT student_id, selected_courses_json, year_number FROM build_semester WHERE semester_id = ?', [semester_id], (err, plans) => {
             if (err) return res.status(500).json({error: err.message});
+
+            let enrollmentsData = [];
             
-            const nextName = generateNextSemesterName(semester_name);
-            db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
-                const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
-                db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err) => {
-                    if (err) return res.status(500).json({error: err.message});
-                    res.json({success: true});
+            plans.forEach(plan => {
+                let courses = [];
+                try { courses = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) { courses = []; }
+                
+                courses.forEach(c => {
+                    enrollmentsData.push([plan.student_id, c.selected_section_id || null, c.course_id, semester_id, plan.year_number, 'undergoing', c.placeholder_id || null]);
                 });
             });
+
+            const finalizeClose = () => {
+                db.query('DELETE FROM build_semester WHERE semester_id = ?', [semester_id], () => {
+                    db.query('UPDATE semesters SET is_registration_open = 0, is_completed = TRUE WHERE semester_id = ?', [semester_id], (err) => {
+                        if (err) return res.status(500).json({error: err.message});
+                        
+                        const nextName = generateNextSemesterName(semester_name);
+                        db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
+                            const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
+                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err) => {
+                                if (err) return res.status(500).json({error: err.message});
+                                res.json({success: true});
+                            });
+                        });
+                    });
+                });
+            };
+
+            if (enrollmentsData.length > 0) {
+                db.query('INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, placeholder_id) VALUES ?', [enrollmentsData], (err) => {
+                    if (err) {
+                        console.error("Bulk Enrollment Error:", err);
+                        return res.status(500).json({error: err.message});
+                    }
+                    finalizeClose();
+                });
+            } else {
+                finalizeClose();
+            }
         });
     }
 });
 
 app.get('/admin/plans', (req, res) => {
-    db.query(`SELECT bs.build_id, bs.selected_courses_json, bs.status, bs.year_number, s.semester_name, u.first_name, u.last_name, u.username as email FROM build_semester bs JOIN students st ON bs.student_id = st.student_id JOIN users u ON st.user_id = u.user_id JOIN semesters s ON bs.semester_id = s.semester_id WHERE bs.status = 'draft'`, (err, results) => res.json(results));
+    db.query(`SELECT bs.build_id, bs.selected_courses_json, bs.status, bs.year_number, s.semester_name, u.first_name, u.last_name, u.username as email FROM build_semester bs JOIN students st ON bs.student_id = st.student_id JOIN users u ON st.user_id = u.user_id JOIN semesters s ON bs.semester_id = s.semester_id WHERE bs.status = 'draft'`, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
-app.put('/admin/plans/:id/approve', (req, res) => {
-    db.query('SELECT student_id, selected_courses_json, year_number FROM build_semester WHERE build_id = ?', [req.params.id], (err, results) => {
-        const plan = results[0];
-        let courseIds;
-        try { courseIds = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) { courseIds = []; }
-        if (!courseIds || courseIds.length === 0) return res.status(400).json({ error: "No courses" });
-
-        const values = courseIds.map(course_id => [plan.student_id, null, course_id, plan.year_number, 'undergoing']);
-        db.query('INSERT INTO enrollments (student_id, section_id, course_id, year_number, status) VALUES ?', [values], () => {
-            db.query('DELETE FROM build_semester WHERE build_id = ?', [req.params.id], () => res.json({ success: true }));
-        });
+app.get('/prerequisites', (req, res) => {
+    db.query('SELECT * FROM prerequisites', (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
     });
 });
 
 app.get('/:table', (req, res) => {
-    const allowedTables = ['users', 'faculties', 'semester_rules', 'courses', 'departments', 'programs', 'prerequisites', 'semesters', 'students', 'program_requirements', 'sections', 'build_semester', 'enrollments'];
+    const allowedTables = ['users', 'faculties', 'semester_rules', 'courses', 'departments', 'programs', 'prerequisites', 'semesters', 'students', 'program_requirements', 'sections', 'build_semester', 'enrollments', 'messages'];
     if (!allowedTables.includes(req.params.table)) return res.status(403).send("Access Denied");
-    db.query(`SELECT * FROM ${req.params.table}`, (err, results) => res.json(results));
+    db.query(`SELECT * FROM ${req.params.table}`, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
 });
 
 app.get('/api/curriculum-graph', (req, res) => {
     db.query('SELECT * FROM courses', (err, courses) => {
-        db.query('SELECT * FROM prerequisites', (err, prereqs) => res.json(buildCurriculumGraph(courses, prereqs)));
+        db.query('SELECT * FROM prerequisites', (err, prereqs) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(buildCurriculumGraph(courses, prereqs));
+        });
     });
 });
 
 app.get('/api/recommendations/:user_id', (req, res) => {
     const sqlStatus = `SELECT c.course_id, e.status FROM courses c JOIN program_requirements pr ON c.course_id = pr.course_id JOIN students s ON s.program_id = pr.program_id AND s.user_id = ? LEFT JOIN enrollments e ON c.course_id = e.course_id AND e.student_id = s.student_id`;
     db.query(sqlStatus, [req.params.user_id], (err, statusResults) => {
+        if (err) return res.status(500).json({ error: err.message });
         db.query('SELECT * FROM courses', (err, courses) => {
             db.query('SELECT * FROM prerequisites', (err, prereqs) => {
                 const graph = buildCurriculumGraph(courses, prereqs);
@@ -288,4 +507,4 @@ app.get('/api/recommendations/:user_id', (req, res) => {
 });
 
 const PORT = 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
