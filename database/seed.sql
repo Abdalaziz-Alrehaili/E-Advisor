@@ -1,3 +1,20 @@
+SET FOREIGN_KEY_CHECKS = 0;
+TRUNCATE TABLE messages;
+TRUNCATE TABLE enrollments;
+TRUNCATE TABLE build_semester;
+TRUNCATE TABLE sections;
+TRUNCATE TABLE program_requirements;
+TRUNCATE TABLE students;
+TRUNCATE TABLE semesters;
+TRUNCATE TABLE prerequisites;
+TRUNCATE TABLE courses;
+TRUNCATE TABLE semester_rules;
+TRUNCATE TABLE programs;
+TRUNCATE TABLE departments;
+TRUNCATE TABLE faculties;
+TRUNCATE TABLE users;
+SET FOREIGN_KEY_CHECKS = 1;
+
 -- ==========================================
 -- 1. Seed Faculties
 -- ==========================================
@@ -34,8 +51,8 @@ INSERT INTO departments (faculty_id, dept_name) VALUES
 -- ==========================================
 -- 3. Seed Programs
 -- ==========================================
-INSERT INTO programs (dept_id, program_name, total_credits_required) VALUES 
-(3, 'Bachelor of Science in Information Systems', 140);
+INSERT INTO programs (dept_id, program_name, total_credits_required, duration_years) VALUES 
+(3, 'Bachelor of Science in Information Systems', 140, 5);
 
 -- ==========================================
 -- 4. Seed Courses
@@ -131,7 +148,6 @@ INSERT INTO courses (dept_id, course_prefix, course_number, course_name, credits
 (17, 'FREE', '2', 'Free Course II', 3),
 (17, 'FREE', '3', 'Free Course III', 3);
 
-
 -- ==========================================
 -- 5. Seed Prerequisites
 -- ==========================================
@@ -172,7 +188,6 @@ INSERT INTO prerequisites (course_id, prereq_id) VALUES
 ((SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '428'), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323')),
 ((SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '499'), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '498'));
 
-
 -- ==========================================
 -- 6. Seed Semester Rules
 -- ==========================================
@@ -180,7 +195,6 @@ INSERT INTO semester_rules (semester_type, max_credits, min_credits) VALUES
 ('1', 20, 10),       
 ('2', 20, 10),       
 ('Summer', 9, 0);    
-
 
 -- ==========================================
 -- 7. Seed Semesters
@@ -205,9 +219,8 @@ INSERT INTO semesters (semester_name, rule_id, is_registration_open, registratio
 ('Second Semester 2026-2027', 2, FALSE, NULL, FALSE),
 ('Summer Semester 2027', 3, FALSE, NULL, FALSE);
 
-
 -- ==========================================
--- 8. Seed Program Requirements (IS Study Plan)
+-- 8. Seed Program Requirements
 -- ==========================================
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) VALUES 
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'BIO' AND course_number = '110'), 1, '1', 'core'),
@@ -235,7 +248,6 @@ INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semes
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '210'), 3, '1', 'core'),
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'BUS' AND course_number = '232'), 3, '1', 'core');
 
--- REPLACE SLOT 1 (Explicit Single Row Insert)
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) 
 VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '1'), 3, '1', 'elective');
 
@@ -256,7 +268,6 @@ INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semes
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '380'), 4, '2', 'core'),
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'ARAB' AND course_number = '201'), 4, '2', 'core');
 
--- REPLACE SLOT 2 (Explicit Single Row Insert)
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) 
 VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND course_number = '1'), 4, '2', 'elective');
 
@@ -269,7 +280,6 @@ INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semes
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '428'), 5, '1', 'core'),
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '342'), 5, '1', 'core');
 
--- REPLACE SLOT 3 & 4 (Explicit Single Row Inserts)
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) 
 VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND course_number = '2'), 5, '1', 'elective');
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) 
@@ -280,7 +290,6 @@ INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semes
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '499'), 5, '2', 'core'),
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '434'), 5, '2', 'core');
 
--- REPLACE SLOT 5 & 6 (Explicit Single Row Inserts)
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) 
 VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '3'), 5, '2', 'elective');
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) 
@@ -293,53 +302,46 @@ INSERT INTO users (username, password, first_name, last_name, role) VALUES
 ('admin1', '25f43b1486ad95a1398e3eeb3d83bc4010015fcc9bedb35b432e00298d5021f7', 'Matthew', 'Williams', 'admin'),
 ('student1', '509e87a6c45ee0a3c657bf946dd6dc43d7e5502143be195280f279002e70f7d9', 'Adam', 'Rodriguez', 'student'),
 ('student2', 'eb4b3111401df980f14f28ad6804ae096df1e1c6963c51eab4140be226f8c94c', 'Thiago', 'Garcia', 'student'),
-('student3', '373b29d2837e83b9ca5cec712a5985843df271cc7c06e64629472f4d03c6f83c', 'John', 'Smith', 'student');
+('student3', '373b29d2837e83b9ca5cec712a5985843df271cc7c06e64629472f4d03c6f83c', 'John', 'Smith', 'student'),
+('supervisor1', SHA2('supervisor1', 256), 'Dr. Ahmed', 'Al-Faisal', 'supervisor'),
+('supervisor2', SHA2('supervisor2', 256), 'Dr. Khalid', 'Omar', 'supervisor');
 
 -- ==========================================
--- 10. Seed Students (Linking to IS Program)
+-- 10. Seed Students
 -- ==========================================
-INSERT INTO students (user_id, program_id, admission_year) VALUES 
-((SELECT user_id FROM users WHERE username = 'student1'), 1, 2021),
-((SELECT user_id FROM users WHERE username = 'student2'), 1, 2022),
-((SELECT user_id FROM users WHERE username = 'student3'), 1, 2023);
+INSERT INTO students (user_id, program_id, admission_year, supervisor_id) VALUES 
+((SELECT user_id FROM users WHERE username = 'student1'), 1, 2022, (SELECT user_id FROM users WHERE username = 'supervisor1')),
+((SELECT user_id FROM users WHERE username = 'student2'), 1, 2023, (SELECT user_id FROM users WHERE username = 'supervisor2')),
+((SELECT user_id FROM users WHERE username = 'student3'), 1, 2024, (SELECT user_id FROM users WHERE username = 'supervisor1'));
 
 -- ==========================================
--- 11. Seed Sections (2 Sections per Course, Male Professors)
+-- 11. Seed Sections
 -- ==========================================
--- SECTION 1: Standard Morning/Noon Slot
 INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
 SELECT 
-    c.course_id, 
-    s.semester_id,
-    'S1',
+    c.course_id, s.semester_id, 'S1',
     ELT(FLOOR(1 + (RAND() * 5)), 'Dr. Ahmad Mansour', 'Dr. Khaled Al-Sayed', 'Prof. Mustafa Osman', 'Dr. Ibrahim Hassan', 'Dr. Omar Bakri'),
     IF(RAND() > 0.5, 'Sun-Tue-Thu', 'Mon-Wed'),
-    '08:00:00',
-    '09:20:00',
+    '08:00:00', '09:20:00',
     CONCAT('Bldg ', FLOOR(1 + (RAND() * 3)), '-R', FLOOR(100 + (RAND() * 50))),
     30
-FROM courses c
-CROSS JOIN (SELECT semester_id FROM semesters) s;
+FROM courses c CROSS JOIN (SELECT semester_id FROM semesters) s;
 
--- SECTION 2: Standard Afternoon/Late Slot
 INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
 SELECT 
-    c.course_id, 
-    s.semester_id,
-    'S2',
+    c.course_id, s.semester_id, 'S2',
     ELT(FLOOR(1 + (RAND() * 5)), 'Dr. Sami Al-Qahtani', 'Dr. Yahya Jameel', 'Prof. Nasser Idris', 'Dr. Suleiman Taha', 'Dr. Waleed Saeed'),
     IF(RAND() > 0.5, 'Sun-Tue-Thu', 'Mon-Wed'),
-    '13:00:00',
-    '14:20:00',
+    '13:00:00', '14:20:00',
     CONCAT('Bldg ', FLOOR(1 + (RAND() * 3)), '-R', FLOOR(100 + (RAND() * 50))),
     30
-FROM courses c
-CROSS JOIN (SELECT semester_id FROM semesters) s;
+FROM courses c CROSS JOIN (SELECT semester_id FROM semesters) s;
 
 -- ==========================================
 -- 12. Seed Enrollments
 -- ==========================================
--- STUDENT 1 (Completed through Year 4)
+
+-- STUDENT 1 (Adam)
 INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade)
 SELECT 1, 
        (SELECT section_id FROM sections WHERE course_id = c.course_id AND semester_id = ((pr.ideal_year - 1) * 3 + pr.ideal_semester) LIMIT 1),
@@ -347,14 +349,20 @@ SELECT 1,
        (pr.ideal_year - 1) * 3 + pr.ideal_semester,
        pr.ideal_year, 
        'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'A', 'B+', 'A', 'A+')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
-WHERE pr.program_id = 1 AND pr.ideal_year <= 3 AND pr.requirement_type = 'core'
-GROUP BY c.course_id, pr.ideal_year, pr.ideal_semester;
+WHERE pr.program_id = 1 AND pr.ideal_year <= 4 AND pr.requirement_type = 'core';
 
--- STUDENT 2 (Behind on a few courses)
--- NEW: Added "AND pr.requirement_type = 'core'" so Student 2 isn't enrolled in FREE-1 automatically
+INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade, placeholder_id) VALUES 
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'BUS' AND course_number = '433') AND semester_id = 7 LIMIT 1), 
+(SELECT course_id FROM courses WHERE course_prefix = 'BUS' AND course_number = '433'), 7, 3, 'completed', 'A', 
+(SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '1')),
+(1, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'MRKC' AND course_number = '323') AND semester_id = 11 LIMIT 1), 
+(SELECT course_id FROM courses WHERE course_prefix = 'MRKC' AND course_number = '323'), 11, 4, 'completed', 'B+', 
+(SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND course_number = '1'));
+
+-- STUDENT 2 (Thiago) 
 INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade)
 SELECT 2, 
        (SELECT section_id FROM sections WHERE course_id = c.course_id AND semester_id = ((pr.ideal_year - 1) * 3 + pr.ideal_semester) LIMIT 1),
@@ -362,32 +370,24 @@ SELECT 2,
        (pr.ideal_year - 1) * 3 + pr.ideal_semester,
        pr.ideal_year, 
        'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'B', 'C+', 'C', 'D+', 'D')
+       ELT(FLOOR(1 + (RAND() * 8)), 'B+', 'B', 'C+', 'C', 'B+', 'B', 'C+', 'C')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
-WHERE pr.program_id = 1 
-  AND pr.ideal_year <= 3 
-  AND pr.requirement_type = 'core'
-  AND NOT (c.course_prefix = 'CPIS' AND c.course_number = '250') 
-  AND NOT (c.course_prefix = 'BUS' AND c.course_number = '232')  
-  AND NOT (c.course_prefix = 'CPIS' AND c.course_number = '312') 
-  AND NOT (c.course_prefix = 'ISLS' AND c.course_number IN ('101', '201'))
-GROUP BY c.course_id, pr.ideal_year, pr.ideal_semester;
+WHERE pr.program_id = 1 AND pr.ideal_year <= 2 AND pr.requirement_type = 'core';
 
--- Manual inserts for the shifted ISLS courses
-INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade) VALUES 
-(2, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '101') AND semester_id = 5 LIMIT 1), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '101'), 5, 2, 'completed', 'A'),
-(2, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '201') AND semester_id = 7 LIMIT 1), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '201'), 7, 3, 'completed', 'B+');
+INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade)
+SELECT 2, 
+       (SELECT section_id FROM sections WHERE course_id = c.course_id AND semester_id = ((pr.ideal_year - 1) * 3 + pr.ideal_semester) LIMIT 1),
+       c.course_id, 
+       (pr.ideal_year - 1) * 3 + pr.ideal_semester,
+       pr.ideal_year, 
+       'completed', 
+       'B'
+FROM program_requirements pr
+JOIN courses c ON pr.course_id = c.course_id
+WHERE pr.program_id = 1 AND pr.ideal_year = 3 AND c.course_prefix IN ('CPCS', 'CPIS', 'BUS') AND c.course_number IN ('204', '222', '210', '232', '240');
 
--- NEW: Student 2 took a real free course (BUS-433) and mapped it to FREE 1!
-INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade, placeholder_id) VALUES 
-(2, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'BUS' AND course_number = '433') AND semester_id = 8 LIMIT 1), 
-(SELECT course_id FROM courses WHERE course_prefix = 'BUS' AND course_number = '433'), 
-8, 3, 'completed', 'A', 
-(SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '1'));
-
--- ================= STUDENT 3 =================
--- Solid student, just finished Year 2, now entering Year 3
+-- STUDENT 3 (John)
 INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade)
 SELECT 3, 
        (SELECT section_id FROM sections WHERE course_id = c.course_id AND semester_id = ((pr.ideal_year - 1) * 3 + pr.ideal_semester) LIMIT 1),
@@ -395,22 +395,46 @@ SELECT 3,
        (pr.ideal_year - 1) * 3 + pr.ideal_semester,
        pr.ideal_year, 
        'completed', 
-       ELT(FLOOR(1 + (RAND() * 8)), 'A', 'A+', 'B+', 'B', 'A', 'B+', 'A', 'C+')
+       ELT(FLOOR(1 + (RAND() * 8)), 'A+', 'A', 'B+', 'A+', 'A', 'A+', 'A', 'B+')
 FROM program_requirements pr
 JOIN courses c ON pr.course_id = c.course_id
-WHERE pr.program_id = 1 
-  AND pr.ideal_year <= 2
-  AND pr.requirement_type = 'core'
-GROUP BY c.course_id, pr.ideal_year, pr.ideal_semester;
+WHERE pr.program_id = 1 AND pr.ideal_year <= 2 AND pr.requirement_type = 'core';
 
--- Adding a few extra courses
-INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade) VALUES 
-(3, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ARAB' AND course_number = '101') AND semester_id = 4 LIMIT 1), (SELECT course_id FROM courses WHERE course_prefix = 'ARAB' AND course_number = '101'), 4, 2, 'completed', 'A+'),
-(3, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '101') AND semester_id = 1 LIMIT 1), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '101'), 1, 1, 'completed', 'A');
+INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade)
+SELECT 3, 
+       (SELECT section_id FROM sections WHERE course_id = c.course_id AND semester_id = 6 LIMIT 1), 
+       c.course_id, 
+       6,
+       2, 
+       'completed', 
+       'A'
+FROM program_requirements pr
+JOIN courses c ON pr.course_id = c.course_id
+WHERE pr.program_id = 1 AND pr.ideal_year = 3 AND c.course_prefix IN ('CPCS', 'BUS') AND c.course_number IN ('204', '222', '232');
 
--- NEW: Student 3 took a Department Elective early (CPIS-363) and mapped it to ELEC 1
 INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade, placeholder_id) VALUES 
-(3, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363') AND semester_id = 6 LIMIT 1), 
-(SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '363'), 
-6, 2, 'completed', 'A+', 
-(SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND course_number = '1'));
+(3, (SELECT section_id FROM sections WHERE course_id = (SELECT course_id FROM courses WHERE course_prefix = 'PR' AND course_number = '211') AND semester_id = 6 LIMIT 1), 
+(SELECT course_id FROM courses WHERE course_prefix = 'PR' AND course_number = '211'), 6, 2, 'completed', 'A+', 
+(SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '1'));
+
+-- ==========================================
+-- 13. Seed Initial Messages (With Staggered Timestamps!)
+-- ==========================================
+
+-- Chat 1: Student 1 (Adam) and Supervisor 1 (Dr. Ahmed)
+INSERT INTO messages (sender_id, receiver_id, content, is_read, timestamp) VALUES
+((SELECT user_id FROM users WHERE username = 'student1'), (SELECT user_id FROM users WHERE username = 'supervisor1'), 'Good morning Dr. Ahmed. I am planning out my final year. Does Senior Project 1 require any specific electives?', TRUE, DATE_SUB(NOW(), INTERVAL 120 MINUTE)),
+((SELECT user_id FROM users WHERE username = 'supervisor1'), (SELECT user_id FROM users WHERE username = 'student1'), 'Good morning Adam. You are doing perfectly on your plan! No specific electives are required for Senior Project, just make sure all prerequisites are cleared.', TRUE, DATE_SUB(NOW(), INTERVAL 60 MINUTE)),
+((SELECT user_id FROM users WHERE username = 'student1'), (SELECT user_id FROM users WHERE username = 'supervisor1'), 'Great, thank you. I will add my final core courses to the draft now.', FALSE, NOW());
+
+-- Chat 2: Student 2 (Thiago) and Supervisor 2 (Dr. Khalid)
+INSERT INTO messages (sender_id, receiver_id, content, is_read, timestamp) VALUES
+((SELECT user_id FROM users WHERE username = 'student2'), (SELECT user_id FROM users WHERE username = 'supervisor2'), 'Hello Dr. Khalid, I know I missed some courses last year. Should I delay CPIS-250 to next semester?', TRUE, DATE_SUB(NOW(), INTERVAL 120 MINUTE)),
+((SELECT user_id FROM users WHERE username = 'supervisor2'), (SELECT user_id FROM users WHERE username = 'student2'), 'Hi Thiago, please do not delay it. You are already behind on credits and CPIS-250 unlocks multiple major requirements.', TRUE, DATE_SUB(NOW(), INTERVAL 60 MINUTE)),
+((SELECT user_id FROM users WHERE username = 'student2'), (SELECT user_id FROM users WHERE username = 'supervisor2'), 'Okay, I understand. I will prioritize it this registration period.', FALSE, NOW());
+
+-- Chat 3: Student 3 (John) and Supervisor 1 (Dr. Ahmed)
+INSERT INTO messages (sender_id, receiver_id, content, is_read, timestamp) VALUES
+((SELECT user_id FROM users WHERE username = 'student3'), (SELECT user_id FROM users WHERE username = 'supervisor1'), 'Hello Dr. Ahmed, I noticed I am a bit ahead on my credits. Is it okay if I take an extra elective this semester?', TRUE, DATE_SUB(NOW(), INTERVAL 120 MINUTE)),
+((SELECT user_id FROM users WHERE username = 'supervisor1'), (SELECT user_id FROM users WHERE username = 'student3'), 'Hi John! Yes, since you are ahead, you have room to explore some electives without overloading your schedule.', TRUE, DATE_SUB(NOW(), INTERVAL 60 MINUTE)),
+((SELECT user_id FROM users WHERE username = 'student3'), (SELECT user_id FROM users WHERE username = 'supervisor1'), 'Awesome, I was looking at Entrepreneurship (BUS-433). Would that fit?', FALSE, NOW());

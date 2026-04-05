@@ -5,6 +5,8 @@ import Profile from './Profile';
 import Plan from './Plan';
 import Explorer from './Explorer';
 import AdminDashboard from './AdminDashboard'; 
+import SupervisorDashboard from './SupervisorDashboard';
+import StudentChat from './StudentChat'; // NEW: Imported the student chat page
 import './App.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
@@ -47,6 +49,12 @@ function App() {
                 <Link to="/explorer" className="text-white text-decoration-none">DB Explorer</Link>
               </>
             )}
+
+            {user && user.role === 'supervisor' && (
+              <>
+                <Link to="/supervisor" className="text-white text-decoration-none">Supervisor Dashboard</Link>
+              </>
+            )}
           </div>
 
           {user && (
@@ -58,19 +66,24 @@ function App() {
         </div>
       </nav>
 
-      {/* CHANGED HERE: container-fluid instead of container, and removed the 1100px max-width */}
       <div className="container-fluid d-flex flex-column align-items-center">
         <div className="w-100">
           <Routes>
             <Route path="/" element={
               !user ? <LoginAndRegister onLogin={handleLogin} /> 
-                    : (user.role === 'admin' ? <Navigate to="/admin" /> : <Navigate to="/profile" />)
+                    : (user.role === 'admin' ? <Navigate to="/admin" /> 
+                    : (user.role === 'supervisor' ? <Navigate to="/supervisor" /> 
+                    : <Navigate to="/profile" />))
             } />
             
             <Route path="/profile" element={user ? <Profile user={user} /> : <Navigate to="/" />} />
             <Route path="/plan" element={user ? <Plan user={user} /> : <Navigate to="/" />} />
             <Route path="/admin" element={user && user.role === 'admin' ? <AdminDashboard /> : <Navigate to="/" />} />
             <Route path="/explorer" element={user && user.role === 'admin' ? <Explorer /> : <Navigate to="/" />} />
+            <Route path="/supervisor" element={user && user.role === 'supervisor' ? <SupervisorDashboard user={user} /> : <Navigate to="/" />} />
+            
+            {/* NEW: The Student Chat Route */}
+            <Route path="/chat" element={user && user.role === 'student' ? <StudentChat user={user} /> : <Navigate to="/" />} />
           </Routes>
         </div>
       </div>

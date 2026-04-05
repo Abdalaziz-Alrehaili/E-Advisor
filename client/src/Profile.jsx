@@ -6,7 +6,10 @@ function Profile({ user }) {
   const [draftPlan, setDraftPlan] = useState(null);
   const [major, setMajor] = useState('');
   
-  // NEW: Modal State for section details
+  // NEW: State for Supervisor and Chat Notifications
+  const [supervisorInfo, setSupervisorInfo] = useState(null);
+  
+  // Modal State for section details
   const [showModal, setShowModal] = useState(false);
   const [selectedSemDetails, setSelectedSemDetails] = useState([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -21,7 +24,6 @@ function Profile({ user }) {
       .catch(err => { console.error("Draft error:", err); setDraftPlan(null); });
   };
 
-  // NEW: Function to open modal and fetch section-specific data
   const fetchSemDetails = (semesterId) => {
     setLoadingDetails(true);
     setShowModal(true);
@@ -55,6 +57,12 @@ function Profile({ user }) {
             if (data && data.major) setMajor(data.major);
         })
         .catch(err => console.error("Major fetch error:", err));
+
+      // NEW: Fetch Supervisor Info & Unread Message Count
+      fetch(`http://localhost:5000/api/student/${user.user_id}/supervisor-info`)
+        .then(res => res.json())
+        .then(data => setSupervisorInfo(data))
+        .catch(err => console.error("Supervisor fetch error:", err));
 
       // Fetch Draft
       fetchDraft();
@@ -103,13 +111,12 @@ function Profile({ user }) {
     if (!acc[year][semKey]) acc[year][semKey] = { 
       name: `Year ${year} - ${semKey === 'Summer' ? 'Summer' : 'Sem ' + semKey}`, 
       courses: [],
-      semester_id: current.semester_id // Store ID to fetch details later
+      semester_id: current.semester_id 
     };
     acc[year][semKey].courses.push(current);
     return acc;
   }, {});
 
-  // --- ACADEMIC CHRONOLOGY LOGIC ---
   const regSemName = draftPlan?.semester_name || "Upcoming Semester";
   let regSemKey = '1'; 
   if (draftPlan) {
@@ -119,7 +126,7 @@ function Profile({ user }) {
   }
 
   let maxYear = 0;
-  let maxSemRule = 0; // 1=First, 2=Second, 3=Summer
+  let maxSemRule = 0; 
   
   safeGrades.forEach(c => {
       let rule = c.actual_rule_id || 1;
@@ -226,11 +233,28 @@ function Profile({ user }) {
               </h3>
             </div>
             
+            {/* UPGRADED: Dynamic Supervisor Line with Chat Button & Badge */}
             <div style={{ textAlign: 'left', paddingLeft: '50px' }}>
-              <h3 className="fw-bold m-0" style={{ color: '#104929' }}>
-                Supervisor: 
+              <h3 className="fw-bold m-0 d-flex align-items-center flex-wrap gap-3" style={{ color: '#104929' }}>
+                <span>Supervisor: {supervisorInfo ? `${supervisorInfo.first_name} ${supervisorInfo.last_name}` : 'Loading...'}</span>
+                
+                {supervisorInfo && (
+                  <Link 
+                    to="/chat" 
+                    className="btn btn-sm rounded-pill text-white fw-bold position-relative d-flex align-items-center shadow-sm transition-all"
+                    style={{ backgroundColor: '#104929', border: 'none', padding: '6px 16px' }}
+                  >
+                    <i className="bi bi-chat-text-fill me-2"></i> Message
+                    {supervisorInfo.unread_count > 0 && (
+                      <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-light" style={{ fontSize: '0.7rem' }}>
+                        {supervisorInfo.unread_count}
+                      </span>
+                    )}
+                  </Link>
+                )}
               </h3>
             </div>
+
           </div>
         </div>
 
@@ -345,7 +369,6 @@ function Profile({ user }) {
                           </tbody>
                         </table>
 
-                        {/* NEW: Centered Details Button for In Progress Semesters */}
                         {isUndergoing && (
                             <div className="mt-auto pt-4 text-center">
                                 <button 
@@ -490,7 +513,6 @@ function Profile({ user }) {
         )}
       </div>
 
-      {/* NEW: DETAILS POPUP MODAL */}
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div className="details-modal shadow-lg" onClick={e => e.stopPropagation()}>

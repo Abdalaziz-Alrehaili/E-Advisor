@@ -2,12 +2,22 @@ const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
 const crypto = require('crypto');
+const http = require('http'); 
+const { Server } = require('socket.io'); 
 require('dotenv').config();
 const { buildCurriculumGraph } = require('./graphUtils');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*", 
+        methods: ["GET", "POST"]
+    }
+});
 
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'db',
@@ -37,6 +47,117 @@ app.post('/login', (req, res) => {
     });
 });
 
+app.get('/api/supervisor/students/:user_id', (req, res) => {
+    const supervisorUserId = req.params.user_id;
+
+    // FIXED: The unread_count subquery now correctly looks for messages RECEIVED by the supervisor and SENT by the student.
+    const sql = `
+        SELECT 
+            st.student_id,
+            u.user_id,
+            u.first_name, 
+            u.last_name, 
+            st.admission_year,
+            p.total_credits_required,
+            p.duration_years,
+            IFNULL((SELECT SUM(c.credits) FROM enrollments e JOIN courses c ON e.course_id = c.course_id WHERE e.student_id = st.student_id AND e.status = 'completed'), 0) AS credits_completed,
+            IFNULL((SELECT ROUND(AVG(
+                CASE e.grade
+                    WHEN 'A+' THEN 5.0 WHEN 'A' THEN 4.75 WHEN 'B+' THEN 4.5 WHEN 'B' THEN 4.0
+                    WHEN 'C+' THEN 3.5 WHEN 'C' THEN 3.0 WHEN 'D+' THEN 2.5 WHEN 'D' THEN 2.0 ELSE 0
+                END
+            ), 2) FROM enrollments e WHERE e.student_id = st.student_id AND e.status = 'completed' AND e.grade IS NOT NULL), 0.00) AS gpa,
+            (SELECT COUNT(*) FROM messages m WHERE m.receiver_id = ? AND m.sender_id = u.user_id AND m.is_read = FALSE) AS unread_count
+        FROM students st
+        JOIN users u ON st.user_id = u.user_id
+        JOIN programs p ON st.program_id = p.program_id
+        WHERE st.supervisor_id = ?
+    `;
+
+    db.query(sql, [supervisorUserId, supervisorUserId], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+app.get('/api/student/:user_id/supervisor-info', (req, res) => {
+    const studentUserId = req.params.user_id;
+    const sql = `
+        SELECT 
+            sup.user_id AS supervisor_id,
+            sup.first_name,
+            sup.last_name,
+            (SELECT COUNT(*) FROM messages m WHERE m.receiver_id = ? AND m.sender_id = sup.user_id AND m.is_read = FALSE) AS unread_count
+        FROM students st
+        JOIN users sup ON st.supervisor_id = sup.user_id
+        WHERE st.user_id = ?
+    `;
+    db.query(sql, [studentUserId, studentUserId], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results.length > 0 ? results[0] : null);
+    });
+});
+
+app.post('/api/chat/mark-read', (req, res) => {
+    const { sender_id, receiver_id } = req.body;
+    const sql = `UPDATE messages SET is_read = TRUE WHERE sender_id = ? AND receiver_id = ?`;
+    db.query(sql, [sender_id, receiver_id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
+app.get('/api/chat/history/:user1/:user2', (req, res) => {
+    const { user1, user2 } = req.params;
+    const sql = `
+        SELECT * FROM messages 
+        WHERE (sender_id = ? AND receiver_id = ?) 
+           OR (sender_id = ? AND receiver_id = ?)
+        ORDER BY timestamp ASC
+    `;
+    db.query(sql, [user1, user2, user2, user1], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+io.on('connection', (socket) => {
+    console.log(`User connected: ${socket.id}`);
+
+    socket.on('join_user_room', (userId) => {
+        socket.join(`user_${userId}`);
+        console.log(`User ${userId} joined their personal room.`);
+    });
+
+    socket.on('send_message', (data) => {
+        const { sender_id, receiver_id, content } = data;
+        
+        const sql = `INSERT INTO messages (sender_id, receiver_id, content) VALUES (?, ?, ?)`;
+        db.query(sql, [sender_id, receiver_id, content], (err, result) => {
+            if (err) {
+                console.error("Error saving message:", err);
+                return;
+            }
+            
+            const newMessage = {
+                message_id: result.insertId,
+                sender_id,
+                receiver_id,
+                content,
+                timestamp: new Date().toISOString(),
+                is_read: 0
+            };
+
+            io.to(`user_${receiver_id}`).emit('receive_message', newMessage);
+            io.to(`user_${sender_id}`).emit('receive_message', newMessage);
+        });
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`User disconnected: ${socket.id}`);
+    });
+});
+
 app.get('/students', (req, res) => {
     const sql = `SELECT s.student_id as id, u.first_name, u.last_name, u.username as email FROM students s JOIN users u ON s.user_id = u.user_id`;
     db.query(sql, (err, results) => {
@@ -59,7 +180,6 @@ app.get('/sections', (req, res) => {
     });
 });
 
-// UPGRADED: Grabs the placeholder name for historical electives so the frontend can display the golden tag
 app.get('/curriculum-status/:user_id', (req, res) => {
     const sql = `
         SELECT 
@@ -350,7 +470,7 @@ app.get('/prerequisites', (req, res) => {
 });
 
 app.get('/:table', (req, res) => {
-    const allowedTables = ['users', 'faculties', 'semester_rules', 'courses', 'departments', 'programs', 'prerequisites', 'semesters', 'students', 'program_requirements', 'sections', 'build_semester', 'enrollments'];
+    const allowedTables = ['users', 'faculties', 'semester_rules', 'courses', 'departments', 'programs', 'prerequisites', 'semesters', 'students', 'program_requirements', 'sections', 'build_semester', 'enrollments', 'messages'];
     if (!allowedTables.includes(req.params.table)) return res.status(403).send("Access Denied");
     db.query(`SELECT * FROM ${req.params.table}`, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -387,4 +507,4 @@ app.get('/api/recommendations/:user_id', (req, res) => {
 });
 
 const PORT = 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

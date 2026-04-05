@@ -4,7 +4,7 @@ CREATE TABLE users (
     password VARCHAR(255) NOT NULL,
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
-    role ENUM('student', 'admin') DEFAULT 'student',
+    role ENUM('student', 'admin', 'supervisor') DEFAULT 'student',
     is_active BOOLEAN DEFAULT TRUE
 );
 
@@ -72,9 +72,11 @@ CREATE TABLE students (
     user_id INT NOT NULL,
     program_id INT NOT NULL,
     admission_year YEAR NOT NULL,
+    supervisor_id INT NULL,
     is_graduated BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (program_id) REFERENCES programs(program_id)
+    FOREIGN KEY (program_id) REFERENCES programs(program_id),
+    FOREIGN KEY (supervisor_id) REFERENCES users(user_id)
 );
 
 CREATE TABLE program_requirements (
@@ -132,4 +134,15 @@ CREATE TABLE enrollments (
     FOREIGN KEY (semester_id) REFERENCES semesters(semester_id),
     FOREIGN KEY (placeholder_id) REFERENCES courses(course_id),
     UNIQUE (student_id, section_id)
+);
+
+CREATE TABLE messages (
+    message_id INT PRIMARY KEY AUTO_INCREMENT,
+    sender_id INT NOT NULL,
+    receiver_id INT NOT NULL,
+    content TEXT NOT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_read BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (sender_id) REFERENCES users(user_id),
+    FOREIGN KEY (receiver_id) REFERENCES users(user_id)
 );
