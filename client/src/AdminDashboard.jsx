@@ -13,7 +13,7 @@ function AdminDashboard() {
   const [newCapacity, setNewCapacity] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // --- NEW: State & Data for Adding Classes ---
+  // State & Data for Adding Classes
   const [allCourses, setAllCourses] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   
@@ -30,7 +30,6 @@ function AdminDashboard() {
     'Bldg 3-R100', 'Bldg 3-R101', 'Bldg 3-R106', 'Bldg 3-R112', 'Bldg 3-R119', 'Bldg 3-R122', 'Bldg 3-R126', 'Bldg 3-R130', 'Bldg 3-R138', 'Bldg 3-R139', 'Bldg 3-R149'
   ];
 
-  // The custom time slots exactly as requested!
   const predefinedTimeSlots = [
     { label: 'Sun-Tue-Thu (08:00 AM - 09:20 AM)', days: 'Sun-Tue-Thu', start: '08:00:00', end: '09:20:00' },
     { label: 'Mon-Wed (08:00 AM - 09:20 AM)', days: 'Mon-Wed', start: '08:00:00', end: '09:20:00' },
@@ -42,7 +41,7 @@ function AdminDashboard() {
 
   const [addFormData, setAddFormData] = useState({
       course_id: '',
-      section_name: 'S3', // Defaults to S3 assuming S1 and S2 exist
+      section_name: 'S3', 
       professor_name: predefinedProfessors[0],
       timeSlotIndex: 0,
       room_number: predefinedRooms[0],
@@ -53,11 +52,9 @@ function AdminDashboard() {
     fetchBoard();
     fetchSections();
     
-    // Fetch all courses so the Admin can pick which course to add a section for
     fetch('http://localhost:5000/courses')
         .then(res => res.json())
         .then(data => {
-            // Sort them nicely (e.g., CPIS-210, CPIS-220)
             const sorted = data.sort((a,b) => (a.course_prefix+a.course_number).localeCompare(b.course_prefix+b.course_number));
             setAllCourses(sorted);
             if(sorted.length > 0) {
@@ -114,7 +111,10 @@ function AdminDashboard() {
       })
       .then(res => res.json())
       .then(data => {
-          if (data.success) fetchBoard();
+          if (data.success) {
+              fetchBoard();
+              fetchSections(); 
+          }
           else alert("Error processing action");
       });
   };
@@ -141,7 +141,6 @@ function AdminDashboard() {
       .catch(err => console.error("Update error:", err));
   };
 
-  // --- NEW: Function to submit the new Class Section ---
   const handleAddNewSection = (e) => {
       e.preventDefault();
       
@@ -166,15 +165,43 @@ function AdminDashboard() {
       .then(res => res.json())
       .then(data => {
           if (data.success) {
-              fetchSections(); // Refresh the table
-              setShowAddModal(false); // Close the modal
-              // Reset the section name to S4, S5 etc to make adding multiples easy
+              fetchSections(); 
+              setShowAddModal(false); 
               setAddFormData(prev => ({ ...prev, section_name: 'S' + (parseInt(prev.section_name.replace('S', '')) + 1) }));
           } else {
               alert("Error adding section: " + data.error);
           }
       })
       .catch(err => console.error("Error adding section:", err));
+  };
+
+  const handleDeleteSection = (section_id) => {
+      if (window.confirm("Are you sure you want to completely remove this section? Students will no longer see it.")) {
+          fetch(`http://localhost:5000/admin/sections/${section_id}`, { method: 'DELETE' })
+          .then(res => res.json())
+          .then(data => {
+              if (data.success) fetchSections(); 
+              else alert("Error removing section");
+          })
+          .catch(err => console.error(err));
+      }
+  };
+
+  // --- NEW: Trigger Mass Grading ---
+  const handleFinalizeGrades = () => {
+      if (window.confirm("Are you sure? This will finalize all 'In Progress' courses across the university and assign random passing grades to students. This simulates the end of a semester.")) {
+          fetch('http://localhost:5000/admin/finalize-grades', { method: 'POST' })
+          .then(res => res.json())
+          .then(data => {
+              if (data.success) {
+                  alert("All 'In Progress' courses have been officially graded and completed!");
+                  // Optional: Refresh board if needed
+              } else {
+                  alert("Error: " + data.error);
+              }
+          })
+          .catch(err => console.error(err));
+      }
   };
 
   const filteredSections = sectionsList.filter(sec => {
@@ -224,7 +251,18 @@ function AdminDashboard() {
           ))}
         </div>
 
-        {/* --- CAPACITY MANAGER WITH SEARCH BAR & ADD BUTTON --- */}
+        {/* --- NEW: ACADEMIC ACTIONS PANEL --- */}
+        <div className="d-flex justify-content-center mb-5 border-bottom pb-5" style={{ maxWidth: '1400px', margin: '0 auto' }}>
+            <button 
+                className="btn fw-bold px-5 py-3 shadow-sm d-flex align-items-center gap-2" 
+                style={{ backgroundColor: '#d97706', color: 'white', borderRadius: '12px', fontSize: '1.1rem' }}
+                onClick={handleFinalizeGrades}
+            >
+                <i className="bi bi-mortarboard-fill fs-4"></i> Simulate End of Semester (Publish Grades)
+            </button>
+        </div>
+
+        {/* --- CAPACITY MANAGER --- */}
         <div className="w-100 mt-5 pt-4 border-top" style={{ maxWidth: '1400px', margin: '0 auto' }}>
             
             <div className="d-flex justify-content-between align-items-center mb-4">
@@ -243,7 +281,6 @@ function AdminDashboard() {
                         />
                     </div>
                     
-                    {/* NEW: Add Class Button */}
                     <button 
                         className="btn fw-bold shadow-sm d-flex align-items-center gap-2 px-4" 
                         style={{ backgroundColor: '#104929', color: 'white', borderRadius: '30px' }}
@@ -281,15 +318,23 @@ function AdminDashboard() {
                                             <span className="text-muted"> / {sec.max_capacity}</span>
                                         </td>
                                         <td className="px-4 text-end">
-                                            <button 
-                                                className="btn btn-sm btn-outline-dark fw-bold px-3"
-                                                onClick={() => {
-                                                    setEditCapacityPrompt(sec);
-                                                    setNewCapacity(sec.max_capacity);
-                                                }}
-                                            >
-                                                Adjust Limit
-                                            </button>
+                                            <div className="d-flex gap-2 justify-content-end">
+                                                <button 
+                                                    className="btn btn-sm btn-outline-dark fw-bold px-3"
+                                                    onClick={() => {
+                                                        setEditCapacityPrompt(sec);
+                                                        setNewCapacity(sec.max_capacity);
+                                                    }}
+                                                >
+                                                    Adjust Limit
+                                                </button>
+                                                <button 
+                                                    className="btn btn-sm btn-outline-danger fw-bold px-3"
+                                                    onClick={() => handleDeleteSection(sec.section_id)}
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 );

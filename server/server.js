@@ -442,7 +442,7 @@ app.get('/admin/semester-board', (req, res) => {
         res.json(buttons);
     });
 });
-
+// --- UPDATED: Close Semester & Auto-Generate Sections for the Next One ---
 app.post('/admin/semester-action', (req, res) => {
     const { semester_id, action, semester_name, close_date } = req.body;
     
@@ -458,11 +458,9 @@ app.post('/admin/semester-action', (req, res) => {
             if (err) return res.status(500).json({error: err.message});
 
             let enrollmentsData = [];
-            
             plans.forEach(plan => {
                 let courses = [];
-                try { courses = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) { courses = []; }
-                
+                try { courses = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) {}
                 courses.forEach(c => {
                     enrollmentsData.push([plan.student_id, c.selected_section_id || null, c.course_id, semester_id, plan.year_number, 'undergoing', c.placeholder_id || null]);
                 });
@@ -476,9 +474,28 @@ app.post('/admin/semester-action', (req, res) => {
                         const nextName = generateNextSemesterName(semester_name);
                         db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
                             const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
-                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err) => {
+                            
+                            // 1. Create the new empty semester
+                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err, newSemResult) => {
                                 if (err) return res.status(500).json({error: err.message});
-                                res.json({success: true});
+                                
+                                const new_semester_id = newSemResult.insertId;
+
+                                // 2. AUTO-GENERATE SECTIONS: Automatically populate the new semester with S1 and S2 for every course!
+                                const autoGenerateSQL1 = `
+                                    INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
+                                    SELECT course_id, ?, 'S1', 'Dr. Ahmad Mansour', 'Sun-Tue-Thu', '08:00:00', '09:20:00', 'Bldg 1-R106', 30 FROM courses
+                                `;
+                                const autoGenerateSQL2 = `
+                                    INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
+                                    SELECT course_id, ?, 'S2', 'Prof. Mustafa Osman', 'Mon-Wed', '10:00:00', '11:20:00', 'Bldg 2-R110', 30 FROM courses
+                                `;
+
+                                db.query(autoGenerateSQL1, [new_semester_id], () => {
+                                    db.query(autoGenerateSQL2, [new_semester_id], () => {
+                                        res.json({success: true});
+                                    });
+                                });
                             });
                         });
                     });
@@ -487,10 +504,7 @@ app.post('/admin/semester-action', (req, res) => {
 
             if (enrollmentsData.length > 0) {
                 db.query('INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, placeholder_id) VALUES ?', [enrollmentsData], (err) => {
-                    if (err) {
-                        console.error("Bulk Enrollment Error:", err);
-                        return res.status(500).json({error: err.message});
-                    }
+                    if (err) return res.status(500).json({error: err.message});
                     finalizeClose();
                 });
             } else {
@@ -498,6 +512,14 @@ app.post('/admin/semester-action', (req, res) => {
             }
         });
     }
+});
+
+// --- NEW: Remove a section entirely ---
+app.delete('/admin/sections/:id', (req, res) => {
+    db.query('DELETE FROM sections WHERE section_id = ?', [req.params.id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
 });
 
 app.get('/admin/plans', (req, res) => {
@@ -646,6 +668,35 @@ app.get('/api/recommendations/:user_id', (req, res) => {
                     .map(course => ({ ...course, priorityScore: course.weight }))
                     .sort((a, b) => b.priorityScore - a.priorityScore);
                 res.json(recommendations);
+            });
+        });
+    });
+});
+
+// --- NEW: Simulate End of Semester (Mass Grade 'Undergoing' Courses) ---
+app.post('/admin/finalize-grades', (req, res) => {
+    db.query("SELECT enrollment_id FROM enrollments WHERE status = 'undergoing'", (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (results.length === 0) {
+            return res.json({ success: true, message: "No undergoing courses found to grade." });
+        }
+
+        const grades = ['A+', 'A', 'B+', 'B', 'C+', 'C'];
+        let completed = 0;
+        let hasError = false;
+
+        results.forEach(row => {
+            const randomGrade = grades[Math.floor(Math.random() * grades.length)];
+            db.query("UPDATE enrollments SET status = 'completed', grade = ? WHERE enrollment_id = ?", [randomGrade, row.enrollment_id], (err) => {
+                if (err && !hasError) {
+                    hasError = true;
+                    return res.status(500).json({ error: err.message });
+                }
+                completed++;
+                if (completed === results.length && !hasError) {
+                    res.json({ success: true });
+                }
             });
         });
     });
