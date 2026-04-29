@@ -126,7 +126,7 @@ CREATE TABLE enrollments (
     semester_id INT NOT NULL,
     year_number INT NOT NULL,
     status ENUM('undergoing', 'completed') DEFAULT 'undergoing',
-    grade VARCHAR(2) DEFAULT NULL,
+    grade INT,
     placeholder_id INT NULL, 
     FOREIGN KEY (student_id) REFERENCES students(student_id),
     FOREIGN KEY (section_id) REFERENCES sections(section_id),

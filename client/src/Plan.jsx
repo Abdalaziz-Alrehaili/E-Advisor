@@ -50,7 +50,7 @@ function Plan({ user }) {
       fetch(`http://localhost:5000/courses`)
         .then(res => res.json())
         .then(data => setAllCourses(data))
-        .catch(err => console.warn("Could not fetch all courses. Falling back to sections extractor.", err));
+        .catch(err => console.warn("Could not fetch all courses.", err));
 
       fetch(`http://localhost:5000/my-draft/${user.user_id}`)
         .then(res => res.json())
@@ -93,6 +93,11 @@ function Plan({ user }) {
     });
   };
 
+  // --- NEW: Calculate Total Completed Credits ---
+  const totalCompletedCredits = curriculum
+    .filter(c => c.status === 'completed')
+    .reduce((sum, c) => sum + (Number(c.credits) || 0), 0);
+
   const checkPrereqsMet = (courseId) => {
     const reqsForThisCourse = prerequisites.filter(p => p.course_id === courseId);
     for (let req of reqsForThisCourse) {
@@ -100,6 +105,21 @@ function Plan({ user }) {
       if (!prereqCourse || prereqCourse.status !== 'completed') return false;
     }
     return true;
+  };
+
+  // --- NEW: Credit Requirement Lock Logic ---
+  const checkCreditRequirements = (course) => {
+      if (!course) return true;
+      const prefix = (course.course_prefix || '').toUpperCase();
+      const number = (course.course_number || '');
+      
+      if (prefix === 'CPIS' && number === '323') {
+          return totalCompletedCredits >= 80;
+      }
+      if (prefix === 'CPIS' && number === '498') {
+          return totalCompletedCredits >= 100;
+      }
+      return true;
   };
 
   const hasTimeConflict = (sec1, sec2) => {
@@ -382,7 +402,7 @@ function Plan({ user }) {
       <div className="container p-0">
         <div className="row g-4 align-items-stretch">
           
-          {/* --- COLUMN 1: RECOMMENDATIONS (Fixed Height: 1100px) --- */}
+          {/* --- COLUMN 1: RECOMMENDATIONS --- */}
           <div className="col-lg-4 d-flex flex-column">
             <div className="p-4 rounded-4 shadow-sm border bg-white d-flex flex-column w-100" style={{ height: '1100px' }}>
               <h5 className="fw-bold mb-3" style={{ color: '#104929' }}>✨ E-Advisor Rankings</h5>
@@ -451,7 +471,7 @@ function Plan({ user }) {
             </div>
           </div>
 
-          {/* --- COLUMN 2: ROADMAP (Fixed Height: 1100px) --- */}
+          {/* --- COLUMN 2: ROADMAP --- */}
           <div className="col-lg-8 d-flex flex-column">
             <div className="p-4 rounded-4 shadow-sm border bg-white d-flex flex-column w-100" style={{ height: '1100px' }}>
               <div className="text-center mb-5 flex-shrink-0">
@@ -466,14 +486,17 @@ function Plan({ user }) {
                     
                     <div className="d-flex flex-column gap-3">
                       {semCourses.map(course => {
-                        const isPlc = isPlaceholder(course);
                         const filledCourse = selectedCourses.find(c => c.placeholder_id === course.course_id);
                         
                         const isPassed = course.status === 'completed';
                         const isOngoing = course.status === 'undergoing';
+                        
                         const prereqsMet = checkPrereqsMet(course.course_id);
-                        const isLocked = !isPassed && !isOngoing && !prereqsMet;
-                        const isAvailable = !isPassed && !isOngoing && prereqsMet;
+                        const creditsMet = checkCreditRequirements(course); // NEW: Credit Check
+
+                        // A course is only available if both prereqs AND credits are met
+                        const isLocked = !isPassed && !isOngoing && (!prereqsMet || !creditsMet);
+                        const isAvailable = !isPassed && !isOngoing && prereqsMet && creditsMet;
                         const isSpotlighted = hoveredCourseId === course.course_id && isAvailable;
 
                         const isSelected = selectedCourses.some(c => c.course_id === course.course_id) || !!filledCourse;
@@ -613,7 +636,7 @@ function Plan({ user }) {
                     <h6 className="fw-bold mb-3 text-muted">Available Courses to Fulfill this Requirement:</h6>
                     <div className="d-flex gap-3 overflow-auto custom-scrollbar pb-3">
                         {getAvailableElectives(previewCourse).map(c => {
-                            const isEvalLocked = !checkPrereqsMet(c.course_id);
+                            const isEvalLocked = !checkPrereqsMet(c.course_id) || !checkCreditRequirements(c);
                             return (
                                 <div key={c.course_id}
                                     onClick={() => { setActiveElectiveCourse(c); setPreviewSectionId(null); }}
@@ -671,8 +694,10 @@ function Plan({ user }) {
                             const isPassed = c.status === 'completed';
                             const isOngoing = c.status === 'undergoing';
                             const isSelected = selectedCourses.some(sc => sc.course_id === c.course_id);
+                            
                             const prereqsMet = checkPrereqsMet(c.course_id);
-                            const isLocked = !isPassed && !isOngoing && !prereqsMet;
+                            const creditsMet = checkCreditRequirements(c);
+                            const isLocked = !isPassed && !isOngoing && (!prereqsMet || !creditsMet);
 
                             let bgColor = isPassed ? '#f8f9fa' : isOngoing ? '#eef2ff' : isLocked ? '#fce8e8' : isSelected ? '#f0fdf4' : '#ffffff';
                             let textColor = (isLocked || isPassed) ? '#6c757d' : '#212529';
@@ -747,11 +772,24 @@ function Plan({ user }) {
                     {(() => {
                         const isPassed = evaluatedCourse.status === 'completed';
                         const isOngoing = evaluatedCourse.status === 'undergoing';
+                        
                         const prereqsMet = checkPrereqsMet(evaluatedCourse.course_id);
-                        const isAvailable = !isPassed && !isOngoing && prereqsMet;
+                        const creditsMet = checkCreditRequirements(evaluatedCourse);
+                        const isAvailable = !isPassed && !isOngoing && prereqsMet && creditsMet;
 
                         if (!isAvailable) {
                             const isLockedAlert = !isPassed && !isOngoing;
+                            
+                            // Dynamic warning generation for the specific rule broken
+                            let lockReason = "";
+                            if (isPassed) lockReason = "You have already completed this course.";
+                            else if (isOngoing) lockReason = "You are currently enrolled in this course.";
+                            else if (!prereqsMet) lockReason = "You must complete all required prerequisites before adding this course.";
+                            else if (!creditsMet) {
+                                if (evaluatedCourse.course_number === '323') lockReason = `You need at least 80 completed credits to register for Summer Training. You currently have ${totalCompletedCredits}.`;
+                                if (evaluatedCourse.course_number === '498') lockReason = `You need at least 100 completed credits to register for Senior Project (1). You currently have ${totalCompletedCredits}.`;
+                            }
+
                             return (
                                 <div className="alert text-center p-4" style={{
                                     backgroundColor: isLockedAlert ? '#fce8e8' : '#e9ecef',
@@ -759,11 +797,7 @@ function Plan({ user }) {
                                     border: isLockedAlert ? '1px solid #f5c2c7' : '1px solid #dee2e6'
                                 }}>
                                     <h5 className="fw-bold mb-2">Registration Unavailable</h5>
-                                    <p className="mb-0">
-                                        {isPassed ? "You have already completed this course." : 
-                                         isOngoing ? "You are currently enrolled in this course." : 
-                                         "You must complete all required prerequisites before adding this course."}
-                                    </p>
+                                    <p className="mb-0 fw-bold">{lockReason}</p>
                                 </div>
                             );
                         }
@@ -843,7 +877,7 @@ function Plan({ user }) {
                       <div className="d-flex gap-2">
                           <button className="btn btn-secondary fw-bold px-4" onClick={() => setShowModal(false)}>Close</button>
                           
-                          {(!evaluatedCourse || !checkPrereqsMet(evaluatedCourse.course_id) || evaluatedCourse.status === 'completed' || evaluatedCourse.status === 'undergoing') ? null : (
+                          {(!evaluatedCourse || !checkPrereqsMet(evaluatedCourse.course_id) || !checkCreditRequirements(evaluatedCourse) || evaluatedCourse.status === 'completed' || evaluatedCourse.status === 'undergoing') ? null : (
                               <button 
                                   className="btn fw-bold px-5 text-white transition-all" 
                                   style={{ 

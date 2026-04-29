@@ -9,7 +9,16 @@ FILE_NAME = "03_historical_seed.sql"
 FIRST_NAMES = ["Mohammed", "Youssef", "Ahmed", "Mahmoud", "Mustafa", "Yaseen", "Taha", "Khalid", "Hamza", "Bilal", "Ibrahim", "Hassan", "Hussein", "Kareem", "Tariq", "Abdulrahman", "Ali", "Omar", "Murad", "Salem", "Abdullah", "Abdulaziz", "Saud", "Salman"]
 LAST_NAMES = ["Alharbi", "Alghamdi", "Alzahrani", "AlAmri", "AlJohani", "AlOtaibi", "AlQahtani", "AlDosari", "AlMaghrabi", "Alturkistani", "Bukhari", "Kurdi", "AlMasri", "Hijazi", "Jowharji", "Kazzaz", "Kutbi", "Attar", "Hakeem", "AlMalki", "AlHarthi", "Khalil", "AlDossari", "AlShamrani"]
 
-# Course Rules (ID: {avg, var, skew, prog})
+# Hardcoded Active Student Names mapped EXACTLY to your requested roster
+ACTIVE_NAMES = [
+    ("Mustafa", "Jowharji"),   # S1: Sup 1 (Ahead)
+    ("Mohammed", "Alharbi"),   # S2: Sup 2 (On Track)
+    ("Tariq", "Bukhari"),      # S3: Sup 2 (Ahead)
+    ("Youssef", "Alghamdi"),   # S4: Sup 1 (Behind)
+    ("Hassan", "Kurdi"),       # S5: Sup 1 (On Track)
+    ("Ali", "AlDossari")       # S6: Sup 2 (Behind)
+]
+
 COURSES = {
     1: {'avg': 93, 'var': 'norm', 'skew': None, 'prog': False}, 2: {'avg': 87, 'var': 'high', 'skew': None, 'prog': False},
     3: {'avg': 86, 'var': 'high', 'skew': None, 'prog': False}, 4: {'avg': 85, 'var': 'high', 'skew': None, 'prog': False},
@@ -54,35 +63,28 @@ PREREQS = {
     52: [32], 51: [38], 55: [54]
 }
 
-# The Strict Foundation Year Courses
+# --- COURSE VAULTS ---
 Y1_SEM1_COURSES = [1, 2, 11, 14, 15, 23] 
 Y1_SEM2_COURSES = [3, 4, 12, 16, 28]     
-Y1_ALL = Y1_SEM1_COURSES + Y1_SEM2_COURSES
 
-# The completely ordered perfect master plan
-UPPER_COURSES = [
-    29, 13, 30, 24, 5, 25, 32, 9, 6,        # Y2
-    27, 26, 31, 17, 33, 34, 39, 19, 35, 48, # Y3
-    42, 44, 46, 20, 45, 36, 43, 49, 10, 38, # Y4
-    7, 54, 51, 40, 8, 55, 52                # Y5
+# Complete pool of all available courses
+ALL_UPPER = [
+    29, 13, 30, 24, 5, 25, 32, 9, 6, 21,                    
+    27, 26, 31, 17, 33, 34, 39, 19, 35, 48, 22, 18,         
+    42, 44, 46, 20, 45, 36, 43, 49, 10, 38, 37, 41, 47,     
+    7, 54, 51, 40, 8, 55, 52, 50, 53                        
 ]
 
-PERFECT_PLAN = Y1_ALL + UPPER_COURSES
+# The Failsafe Pools
+FREE_POOL = [18, 21, 22]               # BUS-433, MRKC-323, PR-211
+ELECTIVES_POOL = [37, 41, 47, 50, 53]  # CPIS-320, 350, 363, 420, 486
+CORE_MAJOR_COURSES = [c for c in ALL_UPPER if c not in FREE_POOL and c not in ELECTIVES_POOL]
+
+PERFECT_PLAN = Y1_SEM1_COURSES + Y1_SEM2_COURSES + ALL_UPPER
 
 # ==========================================
 # 2. Math & Logic Functions
 # ==========================================
-def score_to_grade(score):
-    if score >= 95: return "A+"
-    elif score >= 90: return "A"
-    elif score >= 85: return "B+"
-    elif score >= 80: return "B"
-    elif score >= 75: return "C+"
-    elif score >= 70: return "C"
-    elif score >= 65: return "D+"
-    elif score >= 60: return "D"
-    else: return "F"
-
 def get_realistic_grade(course_id, general_apt, prog_apt):
     c = COURSES.get(course_id, {'avg': 85, 'var': 'norm', 'skew': None, 'prog': False})
     modifier = general_apt
@@ -91,94 +93,141 @@ def get_realistic_grade(course_id, general_apt, prog_apt):
     score = random.gauss(c['avg'] + modifier, sigma)
     if c['skew'] == 'neg': score = max(score, random.gauss(94, 3))
     if c['skew'] == 'pos': score = min(score, random.gauss(70, 5))
-    return score_to_grade(max(0, min(100, score)))
+    return int(max(0, min(100, round(score))))
 
 def force_gpa_grade(target_gpa):
-    if target_gpa >= 4.4: return random.choice(['A+', 'A+', 'A'])
-    elif target_gpa >= 4.2: return random.choice(['A+', 'A', 'B+'])
-    elif target_gpa >= 3.9: return random.choice(['A', 'B+', 'B'])
-    elif target_gpa >= 3.7: return random.choice(['B+', 'B', 'C+'])
-    else: return random.choice(['B', 'C+', 'C', 'D+'])
+    if target_gpa >= 4.8: mean, sigma = 96, 3    
+    elif target_gpa >= 4.4: mean, sigma = 88, 4  
+    elif target_gpa >= 4.0: mean, sigma = 84, 5  
+    elif target_gpa >= 3.6: mean, sigma = 78, 6  
+    else: mean, sigma = 73, 7                    
+    grade = int(random.gauss(mean, sigma))
+    return max(60, min(100, grade))
 
-def get_student_courses(num_courses):
-    return PERFECT_PLAN[:num_courses]
+# --- NEW: CREDIT BARRIER CHECK ---
+def is_credit_unlocked(cid, completed_set):
+    if cid not in [38, 54]:
+        return True
+    
+    # Calculate exact total credits the student currently has passed
+    completed_creds = sum(CREDITS.get(c, 3) for c in completed_set)
+    
+    # Summer Training Barrier
+    if cid == 38 and completed_creds < 80:
+        return False
+    # Senior Project Barrier
+    if cid == 54 and completed_creds < 100:
+        return False
+        
+    return True
 
 # ------------------------------------------
-# THE ADVANCED ACADEMIC ADVISOR SIMULATOR
+# THE FORWARD-SIMULATING ENGINE
 # ------------------------------------------
-def simulate_semesters(courses, start_sem, shuffle=False):
+def simulate_semesters(target_start_sem, pacing):
     allocations = []
-    completed_courses = set()
+    completed = set()
+    free_taken = 0
+    elec_taken = 0
     
-    # --- PHASE 1: THE FOUNDATION YEAR ---
-    for cid in Y1_SEM1_COURSES:
-        if cid in courses:
-            allocations.append({'cid': cid, 'sem': start_sem, 'yr': 1})
-            completed_courses.add(cid)
-            
-    for cid in Y1_SEM2_COURSES:
-        if cid in courses:
-            allocations.append({'cid': cid, 'sem': start_sem + 1, 'yr': 1})
-            completed_courses.add(cid)
-            
-    # --- PHASE 2: UPPER LEVEL COURSES ---
-    current_sem = start_sem + 3 # Explicitly skips Y1 Summer
-    unassigned = [c for c in courses if c not in completed_courses]
-    
-    while unassigned:
-        is_summer = (current_sem % 3 == 0)
-        max_limit = 9 if is_summer else 19
-        min_limit = 0 if is_summer else 10
-        soft_limit = random.randint(4, 8) if is_summer else random.randint(14, 18)
+    for sem in range(1, target_start_sem):
+        is_summer = (sem % 3 == 0)
+        year_num = ((sem - 1) // 3) + 1
         
-        current_creds = 0
-        current_sem_courses = set()
+        if sem == 1:
+            for c in Y1_SEM1_COURSES:
+                allocations.append({'cid': c, 'sem': sem, 'yr': 1, 'placeholder': 'NULL'})
+                completed.add(c)
+            continue
+        elif sem == 2:
+            for c in Y1_SEM2_COURSES:
+                allocations.append({'cid': c, 'sem': sem, 'yr': 1, 'placeholder': 'NULL'})
+                completed.add(c)
+            continue
+        elif sem == 3:
+            continue
+            
+        if is_summer:
+            if pacing == "ahead": target_min, target_max = 3, 9
+            elif pacing == "on_track": target_min, target_max = 0, 6
+            else: target_min, target_max = 0, 3 
+            
+            if random.random() < (0.2 if pacing == "ahead" else (0.6 if pacing == "on_track" else 0.8)):
+                target_min, target_max = 0, 0
+        else:
+            if pacing == "ahead": target_min, target_max = 16, 20
+            elif pacing == "on_track": target_min, target_max = 14, 18
+            else: target_min, target_max = 10, 13
+            
+        target = random.randint(target_min, target_max)
+        if target == 0: continue
         
-        while True:
-            takeable = [c for c in unassigned if all(pr in completed_courses for pr in PREREQS.get(c, []))]
-            
-            if not takeable and current_creds < min_limit and not is_summer:
-                for pad_c in PERFECT_PLAN:
-                    if pad_c not in completed_courses and pad_c not in current_sem_courses and pad_c not in unassigned:
-                        if all(pr in completed_courses for pr in PREREQS.get(pad_c, [])):
-                            unassigned.append(pad_c)
-                            takeable.append(pad_c)
-                            break 
-            
-            if not takeable: break
+        cur_creds = 0
+        sem_courses = []
+        
+        # --- PHASE 1: Try to fill with Core Major Courses ---
+        # NOTE: is_credit_unlocked prevents early capstone/training grabs
+        eligible_core = [c for c in CORE_MAJOR_COURSES if c not in completed and all(pr in completed for pr in PREREQS.get(c, [])) and is_credit_unlocked(c, completed)]
+        for cid in eligible_core:
+            c_cred = CREDITS.get(cid, 3)
+            if cur_creds + c_cred <= target and cur_creds + c_cred <= (9 if is_summer else 20):
+                sem_courses.append({'cid': cid, 'placeholder': 'NULL'})
+                cur_creds += c_cred
 
-            if shuffle: random.shuffle(takeable)
-            else: takeable.sort(key=lambda x: PERFECT_PLAN.index(x))
-            
-            added = False
-            for cid in takeable:
+        # Occasionally sprinkle in an elective
+        if not is_summer and random.random() < 0.25 and cur_creds < target:
+            eligible_free = [c for c in FREE_POOL if c not in completed and all(pr in completed for pr in PREREQS.get(c, []))]
+            if eligible_free:
+                cid = eligible_free[0]
                 c_cred = CREDITS.get(cid, 3)
-                if current_creds + c_cred <= max_limit:
-                    year_num = ((current_sem - start_sem) // 3) + 1
-                    allocations.append({'cid': cid, 'sem': current_sem, 'yr': year_num})
-                    
-                    current_sem_courses.add(cid)
-                    current_creds += c_cred
-                    unassigned.remove(cid)
-                    added = True
-                    break 
+                if cur_creds + c_cred <= target:
+                    free_taken += 1
+                    ph = f"(SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '{min(free_taken, 3)}')"
+                    sem_courses.append({'cid': cid, 'placeholder': ph})
+                    cur_creds += c_cred
 
-            if not added: break 
-            if current_creds >= soft_limit and current_creds >= min_limit: break 
-                
-        completed_courses.update(current_sem_courses)
-        current_sem += 1
+        # --- PHASE 2: EMERGENCY PADDING ---
+        min_required = 10 if not is_summer else 0
         
-        if current_sem % 3 == 0 and random.random() < 0.75:
-            current_sem += 1 
-            
-    # --- PHASE 3: THE SEMESTER 1 ROLLBACK (THE FIX) ---
-    # Guarantee no student is left stranded having only finished a "Semester 1"
-    if allocations:
-        max_sem = max(a['sem'] for a in allocations)
-        if max_sem % 3 == 1: # 1 corresponds to Semester 1 (e.g. 1, 4, 7, 10...)
-            # Delete any overflow courses that spilled into Sem 1
-            allocations = [a for a in allocations if a['sem'] != max_sem]
+        if cur_creds < min_required:
+            eligible_free = [c for c in FREE_POOL if c not in completed and c not in [x['cid'] for x in sem_courses] and all(pr in completed for pr in PREREQS.get(c, []))]
+            for cid in eligible_free:
+                if cur_creds >= min_required: break
+                c_cred = CREDITS.get(cid, 3)
+                if cur_creds + c_cred <= 20:
+                    free_taken += 1
+                    ph = f"(SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '{min(free_taken, 3)}')"
+                    sem_courses.append({'cid': cid, 'placeholder': ph})
+                    cur_creds += c_cred
+                    
+            eligible_elec = [c for c in ELECTIVES_POOL if c not in completed and c not in [x['cid'] for x in sem_courses] and all(pr in completed for pr in PREREQS.get(c, []))]
+            for cid in eligible_elec:
+                if cur_creds >= min_required: break
+                c_cred = CREDITS.get(cid, 3)
+                if cur_creds + c_cred <= 20:
+                    elec_taken += 1
+                    ph = f"(SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND course_number = '{min(elec_taken, 3)}')"
+                    sem_courses.append({'cid': cid, 'placeholder': ph})
+                    cur_creds += c_cred
+                    
+        # --- PHASE 3: Absolute Failsafe ---
+        if not is_summer and cur_creds < min_required:
+            desperate_core = [c for c in CORE_MAJOR_COURSES if c not in completed and c not in [x['cid'] for x in sem_courses] and is_credit_unlocked(c, completed)]
+            for cid in desperate_core:
+                if cur_creds >= min_required: break
+                c_cred = CREDITS.get(cid, 3)
+                if cur_creds + c_cred <= 20:
+                    sem_courses.append({'cid': cid, 'placeholder': 'NULL'})
+                    cur_creds += c_cred
+
+        for sc in sem_courses:
+            allocations.append({
+                'cid': sc['cid'], 
+                'sem': sem, 
+                'yr': year_num,
+                'placeholder': sc['placeholder']
+            })
+            completed.add(sc['cid'])
             
     return allocations
 
@@ -195,12 +244,13 @@ with open(FILE_NAME, "w", encoding="utf-8") as f:
         f"('admin1', '{pw}', 'Matthew', 'Williams', 'admin')",
         f"('supervisor1', '{pw}', 'Dr. Ahmed', 'Al-Faisal', 'supervisor')",
         f"('supervisor2', '{pw}', 'Dr. Khalid', 'Omar', 'supervisor')",
-        f"('supervisor_hist', '{pw}', 'Dr. History', 'Archive', 'supervisor')" # The Ghost Supervisor
+        f"('supervisor_hist', '{pw}', 'Dr. History', 'Archive', 'supervisor')" 
     ]
-    for i in range(1, 7):
-        fn, ln = random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
+    
+    for i, (fn, ln) in enumerate(ACTIVE_NAMES, 1):
         users.append(f"('student{i}', '{pw}', '{fn}', '{ln}', 'student')")
-    for i in range(1, NUM_HISTORICAL_STUDENTS + 1):
+        
+    for i in range(11, 11 + NUM_HISTORICAL_STUDENTS):
         fn, ln = random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
         users.append(f"('hist_student{i}', '{pw}', '{fn}', '{ln}', 'student')")
     f.write(",\n".join(users) + ";\n\n")
@@ -209,12 +259,12 @@ with open(FILE_NAME, "w", encoding="utf-8") as f:
     f.write("INSERT INTO students (user_id, program_id, admission_year, supervisor_id, is_graduated) VALUES \n")
     students = []
     
-    students.append("(5, 1, 2024, 2, FALSE)") # S1: Y3 (Sup 1)
-    students.append("(6, 1, 2024, 3, FALSE)") # S2: Y3 (Sup 2)
-    students.append("(7, 1, 2023, 3, FALSE)") # S3: Y4 (Sup 2)
-    students.append("(8, 1, 2023, 2, FALSE)") # S4: Y4 (Sup 1)
-    students.append("(9, 1, 2022, 2, FALSE)") # S5: Y5 (Sup 1)
-    students.append("(10, 1, 2022, 3, FALSE)") # S6: Y5 (Sup 2)
+    students.append("(5, 1, 2024, 2, FALSE)")  # Sup 1
+    students.append("(6, 1, 2024, 3, FALSE)")  # Sup 2
+    students.append("(7, 1, 2023, 3, FALSE)")  # Sup 2
+    students.append("(8, 1, 2023, 2, FALSE)")  # Sup 1
+    students.append("(9, 1, 2022, 2, FALSE)")  # Sup 1
+    students.append("(10, 1, 2022, 3, FALSE)") # Sup 2
     
     for i in range(11, 11 + NUM_HISTORICAL_STUDENTS):
         sup_id = 4 
@@ -223,24 +273,23 @@ with open(FILE_NAME, "w", encoding="utf-8") as f:
     f.write(",\n".join(students) + ";\n\n")
 
     f.write("-- 3. Enrollments (Active Students)\n")
-    f.write("INSERT INTO enrollments (student_id, course_id, semester_id, year_number, status, grade) VALUES \n")
+    f.write("INSERT INTO enrollments (student_id, course_id, semester_id, year_number, status, grade, placeholder_id) VALUES \n")
     enrolls = []
     
-    # Adjusted course limits so they naturally end close to the end of their respective years
     profiles = [
-        {"id": 1, "gpa": 4.4, "start_sem": 10, "shuffle": True,  "courses": get_student_courses(21)}, # Y3
-        {"id": 2, "gpa": 3.9, "start_sem": 10, "shuffle": False, "courses": get_student_courses(20)}, # Y3 Perfect
-        {"id": 3, "gpa": 4.2, "start_sem": 7,  "shuffle": True,  "courses": get_student_courses(31)}, # Y4
-        {"id": 4, "gpa": 3.6, "start_sem": 7,  "shuffle": True,  "courses": get_student_courses(28)}, # Y4
-        {"id": 5, "gpa": 4.3, "start_sem": 4,  "shuffle": False, "courses": get_student_courses(40)}, # Y5 Perfect
-        {"id": 6, "gpa": 3.7, "start_sem": 4,  "shuffle": True,  "courses": get_student_courses(37)}, # Y5
+        {"id": 1, "gpa": 4.4, "start_sem": 7,  "pacing": "ahead"},    # Sup 1
+        {"id": 2, "gpa": 3.9, "start_sem": 7,  "pacing": "on_track"}, # Sup 2
+        {"id": 3, "gpa": 4.2, "start_sem": 10, "pacing": "ahead"},    # Sup 2
+        {"id": 4, "gpa": 3.6, "start_sem": 10, "pacing": "behind"},   # Sup 1
+        {"id": 5, "gpa": 4.3, "start_sem": 13, "pacing": "on_track"}, # Sup 1
+        {"id": 6, "gpa": 3.7, "start_sem": 13, "pacing": "behind"},   # Sup 2
     ]
     
     for p in profiles:
-        allocs = simulate_semesters(p["courses"], p["start_sem"], p["shuffle"])
+        allocs = simulate_semesters(p["start_sem"], p["pacing"])
         for a in allocs:
             grade = force_gpa_grade(p["gpa"])
-            enrolls.append(f"({p['id']}, {a['cid']}, {a['sem']}, {a['yr']}, 'completed', '{grade}')")
+            enrolls.append(f"({p['id']}, {a['cid']}, {a['sem']}, {a['yr']}, 'completed', {grade}, {a['placeholder']})")
     f.write(",\n".join(enrolls) + ";\n\n")
 
     f.write("-- 4. Enrollments (Historical Machine Learning Data)\n")
@@ -248,22 +297,20 @@ with open(FILE_NAME, "w", encoding="utf-8") as f:
     for student_id in range(7, 7 + NUM_HISTORICAL_STUDENTS):
         gen_apt = random.uniform(-4, 4)
         prog_apt = random.uniform(-5, 5)
-        start_sem = random.choice([1, 4, 7]) 
+        start_sem = random.randint(10, 16) 
+        pacing = random.choice(["ahead", "on_track", "behind"])
         
-        num_courses = random.randint(35, 48)
-        taken = get_student_courses(num_courses)
-        
-        allocs = simulate_semesters(taken, start_sem, shuffle=True)
+        allocs = simulate_semesters(start_sem, pacing)
         for a in allocs:
             grade = get_realistic_grade(a['cid'], gen_apt, prog_apt)
-            hist_enrolls.append(f"({student_id}, {a['cid']}, {a['sem']}, {a['yr']}, 'completed', '{grade}')")
+            hist_enrolls.append(f"({student_id}, {a['cid']}, {a['sem']}, {a['yr']}, 'completed', {grade}, {a['placeholder']})")
 
     chunk_size = 500
     for i in range(0, len(hist_enrolls), chunk_size):
         chunk = hist_enrolls[i:i+chunk_size]
-        f.write("INSERT INTO enrollments (student_id, course_id, semester_id, year_number, status, grade) VALUES \n")
+        f.write("INSERT INTO enrollments (student_id, course_id, semester_id, year_number, status, grade, placeholder_id) VALUES \n")
         f.write(",\n".join(chunk) + ";\n")
 
     f.write("\nSET FOREIGN_KEY_CHECKS = 1;\n")
 
-print(f"Success! Generated {FILE_NAME}. Semester 1 Rollback logic engaged.")
+print(f"Success! Generated {FILE_NAME}. Credit limits enforced successfully.")

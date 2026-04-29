@@ -81,14 +81,29 @@ function Profile({ user }) {
       }
   };
 
+  // UPDATED: Now calculates GPA based on numerical grades!
   const calculateGPA = (academicRecords) => {
     if (!Array.isArray(academicRecords)) return "N/A";
-    const gradePoints = { 'A+': 5.0, 'A': 4.75, 'B+': 4.5, 'B': 4.0, 'C+': 3.5, 'C': 3.0, 'D+': 2.5, 'D': 2.0, 'F': 0 };
+    
+    const getGradePoints = (numericalGrade) => {
+      const g = Number(numericalGrade);
+      if (g >= 95) return 5.0;
+      if (g >= 90) return 4.75;
+      if (g >= 85) return 4.5;
+      if (g >= 80) return 4.0;
+      if (g >= 75) return 3.5;
+      if (g >= 70) return 3.0;
+      if (g >= 65) return 2.5;
+      if (g >= 60) return 2.0;
+      return 0.0; // F
+    };
+
     let totalPoints = 0, totalCredits = 0;
     academicRecords.forEach(record => {
-      if (record.grade && gradePoints[record.grade] !== undefined) {
+      // Only count completed courses that have a numeric grade
+      if (record.status === 'completed' && record.grade !== null && record.grade !== undefined) {
         const credits = Number(record.credits) || 0;
-        totalPoints += gradePoints[record.grade] * credits;
+        totalPoints += getGradePoints(record.grade) * credits;
         totalCredits += credits;
       }
     });
@@ -233,7 +248,6 @@ function Profile({ user }) {
               </h3>
             </div>
             
-            {/* UPGRADED: Dynamic Supervisor Line with Chat Button & Badge */}
             <div style={{ textAlign: 'left', paddingLeft: '50px' }}>
               <h3 className="fw-bold m-0 d-flex align-items-center flex-wrap gap-3" style={{ color: '#104929' }}>
                 <span>Supervisor: {supervisorInfo ? `${supervisorInfo.first_name} ${supervisorInfo.last_name}` : 'Loading...'}</span>

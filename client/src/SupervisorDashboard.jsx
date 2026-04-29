@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { Link } from 'react-router-dom';
 
 const socket = io('http://localhost:5000');
 
@@ -137,11 +138,10 @@ function SupervisorDashboard({ user }) {
     }
   };
 
-  // FIXED: The arrows have been swapped exactly as requested!
   const getSortIcon = (key) => {
     if (sortConfig.key !== key) return '';
-    if (sortConfig.direction === 'desc') return ' ↑'; // Highest to Lowest
-    if (sortConfig.direction === 'asc') return ' ↓';  // Lowest to Highest
+    if (sortConfig.direction === 'desc') return ' ↑'; 
+    if (sortConfig.direction === 'asc') return ' ↓';  
     return '';
   };
 
@@ -396,6 +396,7 @@ function SupervisorDashboard({ user }) {
                                     <td>{c.course_name}</td>
                                     <td>{c.credits}</td>
                                     <td>
+                                        {/* This renders the numerical grade beautifully */}
                                         {c.status === 'completed' ? <span className="badge bg-success">{c.grade}</span> : <span className="badge bg-primary">In Progress</span>}
                                     </td>
                                 </tr>

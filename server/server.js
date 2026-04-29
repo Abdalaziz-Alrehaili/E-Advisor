@@ -50,7 +50,7 @@ app.post('/login', (req, res) => {
 app.get('/api/supervisor/students/:user_id', (req, res) => {
     const supervisorUserId = req.params.user_id;
 
-    // FIXED: The unread_count subquery now correctly looks for messages RECEIVED by the supervisor and SENT by the student.
+    // FIXED: The GPA calculation now uses numerical integer ranges!
     const sql = `
         SELECT 
             st.student_id,
@@ -62,9 +62,16 @@ app.get('/api/supervisor/students/:user_id', (req, res) => {
             p.duration_years,
             IFNULL((SELECT SUM(c.credits) FROM enrollments e JOIN courses c ON e.course_id = c.course_id WHERE e.student_id = st.student_id AND e.status = 'completed'), 0) AS credits_completed,
             IFNULL((SELECT ROUND(AVG(
-                CASE e.grade
-                    WHEN 'A+' THEN 5.0 WHEN 'A' THEN 4.75 WHEN 'B+' THEN 4.5 WHEN 'B' THEN 4.0
-                    WHEN 'C+' THEN 3.5 WHEN 'C' THEN 3.0 WHEN 'D+' THEN 2.5 WHEN 'D' THEN 2.0 ELSE 0
+                CASE 
+                    WHEN e.grade >= 95 THEN 5.0 
+                    WHEN e.grade >= 90 THEN 4.75 
+                    WHEN e.grade >= 85 THEN 4.5 
+                    WHEN e.grade >= 80 THEN 4.0
+                    WHEN e.grade >= 75 THEN 3.5 
+                    WHEN e.grade >= 70 THEN 3.0 
+                    WHEN e.grade >= 65 THEN 2.5 
+                    WHEN e.grade >= 60 THEN 2.0 
+                    ELSE 1.0 
                 END
             ), 2) FROM enrollments e WHERE e.student_id = st.student_id AND e.status = 'completed' AND e.grade IS NOT NULL), 0.00) AS gpa,
             (SELECT COUNT(*) FROM messages m WHERE m.receiver_id = ? AND m.sender_id = u.user_id AND m.is_read = FALSE) AS unread_count
