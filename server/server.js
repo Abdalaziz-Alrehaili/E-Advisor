@@ -305,6 +305,7 @@ app.get('/my-draft/:user_id', (req, res) => {
     });
 });
 
+// --- UPDATED: Save Plan with Capacity Gatekeeper ---
 app.post('/save-plan', (req, res) => {
     const { user_id, selectedCourses } = req.body;
     if (!selectedCourses || selectedCourses.length === 0) return res.status(400).json({ error: "No courses selected" });
@@ -322,18 +323,55 @@ app.post('/save-plan', (req, res) => {
             const max_year = studentResult[0].max_year > 10 ? 0 : studentResult[0].max_year; 
             const isFirstSem = open_semester_name.toLowerCase().includes('first') || open_semester_name.includes('1');
             const dynamic_year_number = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
-            const selected_courses_json = JSON.stringify(selectedCourses);
-
-            db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
-                if (draftResult.length > 0) {
-                    db.query('UPDATE build_semester SET selected_courses_json = ?, semester_id = ?, year_number = ?, status = "draft", updated_at = NOW() WHERE student_id = ?', [selected_courses_json, open_semester_id, dynamic_year_number, student_id], (err) => {
-                        if (err) return res.status(500).json({ error: err.message });
-                        res.json({ success: true });
+            
+            // --- NEW: CAPACITY CHECK LOGIC ---
+            // Fetch all OTHER students' drafts for this semester
+            db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ? AND student_id != ?', [open_semester_id, student_id], (err, drafts) => {
+                if (err) return res.status(500).json({ error: err.message });
+                
+                let draftCounts = {};
+                drafts.forEach(draft => {
+                    let courses = [];
+                    try { courses = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) {}
+                    courses.forEach(c => {
+                        if (c.selected_section_id) {
+                            draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
+                        }
                     });
-                } else {
-                    db.query('INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")', [student_id, open_semester_id, dynamic_year_number, selected_courses_json], (err) => {
-                        if (err) return res.status(500).json({ error: err.message });
-                        res.json({ success: true });
+                });
+
+                const requestedSectionIds = selectedCourses.map(c => c.selected_section_id).filter(Boolean);
+                if (requestedSectionIds.length === 0) return proceedToSave();
+
+                // Cross-reference requested sections with max capacities
+                db.query('SELECT section_id, max_capacity, section_name FROM sections WHERE section_id IN (?)', [requestedSectionIds], (err, sectionsInfo) => {
+                    if (err) return res.status(500).json({ error: err.message });
+
+                    for (let sec of sectionsInfo) {
+                        const taken = draftCounts[sec.section_id] || 0;
+                        if (taken >= sec.max_capacity) {
+                            // BLOCK SAVE: Send error back to the React UI
+                            return res.json({ success: false, error: `Section ${sec.section_name} is full! (Limit: ${sec.max_capacity}). Please choose a different section or time.` });
+                        }
+                    }
+                    proceedToSave();
+                });
+
+                // Function to save if capacities check out
+                function proceedToSave() {
+                    const selected_courses_json = JSON.stringify(selectedCourses);
+                    db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
+                        if (draftResult.length > 0) {
+                            db.query('UPDATE build_semester SET selected_courses_json = ?, semester_id = ?, year_number = ?, status = "draft", updated_at = NOW() WHERE student_id = ?', [selected_courses_json, open_semester_id, dynamic_year_number, student_id], (err) => {
+                                if (err) return res.status(500).json({ error: err.message });
+                                res.json({ success: true });
+                            });
+                        } else {
+                            db.query('INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")', [student_id, open_semester_id, dynamic_year_number, selected_courses_json], (err) => {
+                                if (err) return res.status(500).json({ error: err.message });
+                                res.json({ success: true });
+                            });
+                        }
                     });
                 }
             });
@@ -459,6 +497,79 @@ app.get('/admin/plans', (req, res) => {
     db.query(`SELECT bs.build_id, bs.selected_courses_json, bs.status, bs.year_number, s.semester_name, u.first_name, u.last_name, u.username as email FROM build_semester bs JOIN students st ON bs.student_id = st.student_id JOIN users u ON st.user_id = u.user_id JOIN semesters s ON bs.semester_id = s.semester_id WHERE bs.status = 'draft'`, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
+    });
+});
+
+// --- UPDATED: Fetch sections and count DRAFTED seats ---
+app.get('/admin/sections', (req, res) => {
+    const sqlSem = `SELECT semester_id, semester_name FROM semesters WHERE is_completed = FALSE ORDER BY semester_id ASC LIMIT 1`;
+    
+    db.query(sqlSem, (err, semResult) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (semResult.length === 0) return res.json([]); 
+
+        const targetSemesterId = semResult[0].semester_id;
+
+        const sql = `
+            SELECT 
+                s.section_id, 
+                c.course_prefix, 
+                c.course_number, 
+                c.course_name, 
+                s.section_name, 
+                s.max_capacity,
+                (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.section_id AND e.status = 'undergoing') as enrolled_count
+            FROM sections s
+            JOIN courses c ON s.course_id = c.course_id
+            WHERE s.semester_id = ?
+            ORDER BY c.course_prefix, c.course_number, s.section_name
+        `;
+        
+        db.query(sql, [targetSemesterId], (err, sections) => {
+            if (err) return res.status(500).json({ error: err.message });
+            
+            // NEW: Fetch all drafted plans and parse them to count taken seats
+            db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ?', [targetSemesterId], (err, drafts) => {
+                if (err) return res.status(500).json({ error: err.message });
+                
+                let draftCounts = {};
+                drafts.forEach(draft => {
+                    let courses = [];
+                    try { courses = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) {}
+                    courses.forEach(c => {
+                        if (c.selected_section_id) {
+                            draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
+                        }
+                    });
+                });
+
+                // Combine official enrollments + drafted seats
+                const finalSections = sections.map(sec => {
+                    const drafted = draftCounts[sec.section_id] || 0;
+                    return {
+                        ...sec,
+                        enrolled_count: sec.enrolled_count + drafted
+                    };
+                });
+
+                res.json(finalSections);
+            });
+        });
+    });
+});
+
+// --- NEW: Update the max capacity of a specific section ---
+app.put('/admin/sections/:id/capacity', (req, res) => {
+    const { id } = req.params;
+    const { max_capacity } = req.body;
+    
+    if (!max_capacity || isNaN(max_capacity)) {
+        return res.status(400).json({ error: "Invalid capacity provided" });
+    }
+
+    db.query('UPDATE sections SET max_capacity = ? WHERE section_id = ?', [parseInt(max_capacity), id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
     });
 });
 
