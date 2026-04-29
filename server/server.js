@@ -1,6 +1,7 @@
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
+const { spawn } = require('child_process');
 const crypto = require('crypto');
 const http = require('http'); 
 const { Server } = require('socket.io'); 
@@ -50,7 +51,6 @@ app.post('/login', (req, res) => {
 app.get('/api/supervisor/students/:user_id', (req, res) => {
     const supervisorUserId = req.params.user_id;
 
-    // FIXED: The GPA calculation now uses numerical integer ranges!
     const sql = `
         SELECT 
             st.student_id,
@@ -78,7 +78,8 @@ app.get('/api/supervisor/students/:user_id', (req, res) => {
         FROM students st
         JOIN users u ON st.user_id = u.user_id
         JOIN programs p ON st.program_id = p.program_id
-        WHERE st.supervisor_id = ?
+        JOIN professors prof ON st.supervisor_id = prof.professor_id
+        WHERE prof.user_id = ? AND st.is_graduated = FALSE
     `;
 
     db.query(sql, [supervisorUserId, supervisorUserId], (err, results) => {
@@ -96,7 +97,8 @@ app.get('/api/student/:user_id/supervisor-info', (req, res) => {
             sup.last_name,
             (SELECT COUNT(*) FROM messages m WHERE m.receiver_id = ? AND m.sender_id = sup.user_id AND m.is_read = FALSE) AS unread_count
         FROM students st
-        JOIN users sup ON st.supervisor_id = sup.user_id
+        JOIN professors prof ON st.supervisor_id = prof.professor_id
+        JOIN users sup ON prof.user_id = sup.user_id
         WHERE st.user_id = ?
     `;
     db.query(sql, [studentUserId, studentUserId], (err, results) => {
@@ -252,16 +254,22 @@ app.get('/my-major/:user_id', (req, res) => {
 app.get('/enrollment-details/:user_id/:semester_id', (req, res) => {
     const { user_id, semester_id } = req.params;
     const sql = `
-        SELECT c.course_prefix, c.course_number, c.course_name, s.professor_name, s.days, s.start_time, s.end_time, s.room_number
+        SELECT c.course_prefix, c.course_number, c.course_name, u.first_name, u.last_name, s.days, s.start_time, s.end_time, s.room_number
         FROM enrollments e
         JOIN courses c ON e.course_id = c.course_id
         JOIN sections s ON e.section_id = s.section_id
+        JOIN professors prof ON s.professor_id = prof.professor_id
+        JOIN users u ON prof.user_id = u.user_id
         JOIN students st ON e.student_id = st.student_id
         WHERE st.user_id = ? AND e.semester_id = ?
     `;
     db.query(sql, [user_id, semester_id], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
+        const mappedResults = results.map(row => ({
+            ...row,
+            professor_name: `${row.first_name} ${row.last_name}`
+        }));
+        res.json(mappedResults);
     });
 });
 
@@ -477,7 +485,7 @@ app.get('/prerequisites', (req, res) => {
 });
 
 app.get('/:table', (req, res) => {
-    const allowedTables = ['users', 'faculties', 'semester_rules', 'courses', 'departments', 'programs', 'prerequisites', 'semesters', 'students', 'program_requirements', 'sections', 'build_semester', 'enrollments', 'messages'];
+    const allowedTables = ['users', 'faculties', 'semester_rules', 'courses', 'departments', 'programs', 'prerequisites', 'semesters', 'students', 'program_requirements', 'sections', 'build_semester', 'enrollments', 'messages', 'professors'];
     if (!allowedTables.includes(req.params.table)) return res.status(403).send("Access Denied");
     db.query(`SELECT * FROM ${req.params.table}`, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -510,6 +518,145 @@ app.get('/api/recommendations/:user_id', (req, res) => {
                 res.json(recommendations);
             });
         });
+    });
+});
+
+// ==========================================
+// UPGRADED MACHINE LEARNING EXTRACTION API
+// ==========================================
+app.get('/api/ml/extract-training-data', (req, res) => {
+    const sql = `
+        SELECT 
+            e.enrollment_id,
+            e.course_id,
+            c.credits AS course_credits,
+            e.grade AS actual_grade,
+            
+            -- Feature: Is it a summer semester? (1 = Yes, 0 = No)
+            CASE WHEN sr.semester_type = 'Summer' THEN 1 ELSE 0 END AS is_summer,
+            
+            -- Feature: Course Historical Average
+            IFNULL((
+                SELECT ROUND(AVG(grade), 2) FROM enrollments 
+                WHERE course_id = e.course_id AND status = 'completed' AND grade IS NOT NULL
+            ), 85.00) AS course_historical_average,
+            
+            -- Feature: Professor Historical Average (How easy is this specific professor overall?)
+            IFNULL((
+                SELECT ROUND(AVG(e_prof.grade), 2) 
+                FROM enrollments e_prof 
+                JOIN sections s_prof ON e_prof.section_id = s_prof.section_id 
+                WHERE s_prof.professor_id = s.professor_id 
+                  AND e_prof.status = 'completed' AND e_prof.grade IS NOT NULL
+            ), 85.00) AS prof_historical_average,
+            
+            -- Feature: Professor Course-Specific Average (Is this professor brutal in THIS specific course?)
+            IFNULL((
+                SELECT ROUND(AVG(e_spec.grade), 2) 
+                FROM enrollments e_spec 
+                JOIN sections s_spec ON e_spec.section_id = s_spec.section_id 
+                WHERE s_spec.professor_id = s.professor_id 
+                  AND e_spec.course_id = e.course_id 
+                  AND e_spec.status = 'completed' AND e_spec.grade IS NOT NULL
+            ), 85.00) AS prof_course_specific_average,
+            
+            -- Feature: Credits Completed BEFORE this course
+            IFNULL((
+                SELECT SUM(c2.credits) FROM enrollments e2 
+                JOIN courses c2 ON e2.course_id = c2.course_id 
+                WHERE e2.student_id = e.student_id 
+                  AND e2.status = 'completed' AND e2.semester_id < e.semester_id
+            ), 0) AS credits_completed_before,
+            
+            -- Feature: Cumulative GPA BEFORE this course
+            IFNULL((
+                SELECT ROUND(AVG(
+                    CASE 
+                        WHEN grade >= 95 THEN 5.0 WHEN grade >= 90 THEN 4.75 
+                        WHEN grade >= 85 THEN 4.5 WHEN grade >= 80 THEN 4.0
+                        WHEN grade >= 75 THEN 3.5 WHEN grade >= 70 THEN 3.0 
+                        WHEN grade >= 65 THEN 2.5 WHEN grade >= 60 THEN 2.0 
+                        ELSE 1.0 
+                    END
+                ), 2) 
+                FROM enrollments e3 
+                WHERE e3.student_id = e.student_id AND e3.status = 'completed' 
+                  AND e3.semester_id < e.semester_id AND e3.grade IS NOT NULL
+            ), 0.00) AS cumulative_gpa_before,
+            
+            -- Feature: Attempted Semester Credits
+            IFNULL((
+                SELECT SUM(c4.credits) FROM enrollments e4 
+                JOIN courses c4 ON e4.course_id = c4.course_id 
+                WHERE e4.student_id = e.student_id AND e4.semester_id = e.semester_id
+            ), c.credits) AS attempted_semester_credits,
+            
+            -- Feature: Current Schedule Difficulty (Average historical grade of all courses taken this semester)
+            IFNULL((
+                SELECT ROUND(AVG(hist_grades.c_avg), 2)
+                FROM enrollments e_sched
+                JOIN (
+                    SELECT course_id, AVG(grade) AS c_avg 
+                    FROM enrollments 
+                    WHERE status = 'completed' AND grade IS NOT NULL 
+                    GROUP BY course_id
+                ) hist_grades ON e_sched.course_id = hist_grades.course_id
+                WHERE e_sched.student_id = e.student_id AND e_sched.semester_id = e.semester_id
+            ), 85.00) AS current_schedule_difficulty
+            
+        FROM enrollments e
+        JOIN courses c ON e.course_id = c.course_id
+        JOIN semesters sem ON e.semester_id = sem.semester_id
+        JOIN semester_rules sr ON sem.rule_id = sr.rule_id
+        LEFT JOIN sections s ON e.section_id = s.section_id
+        WHERE e.status = 'completed' AND e.grade IS NOT NULL;
+    `;
+
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error("ML Extraction Error:", err);
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(results);
+    });
+});
+
+// ==========================================
+// AI PREDICTION ENDPOINT
+// ==========================================
+app.post('/api/predict', (req, res) => {
+    const studentData = req.body;
+
+    // Spawn the Python process (We use 'python3' for Docker Linux environments)
+    const pythonProcess = spawn('python3', ['predict.py', JSON.stringify(studentData)]);
+
+    let result = '';
+    let errorOutput = '';
+
+    // Listen for the AI's answer
+    pythonProcess.stdout.on('data', (data) => {
+        result += data.toString();
+    });
+
+    // Listen for Python crashes
+    pythonProcess.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+    });
+
+    // When the Python script finishes:
+    pythonProcess.on('close', (code) => {
+        if (code !== 0) {
+            console.error(`Python ML Error: ${errorOutput}`);
+            return res.status(500).json({ error: 'Prediction engine failed', details: errorOutput });
+        }
+        try {
+            // Send the final grade back to the frontend!
+            const prediction = JSON.parse(result);
+            res.json(prediction);
+        } catch (e) {
+            console.error("Failed to parse Python output:", result);
+            res.status(500).json({ error: 'Invalid response from AI model' });
+        }
     });
 });
 

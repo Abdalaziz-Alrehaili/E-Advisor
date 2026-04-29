@@ -4,7 +4,7 @@ CREATE TABLE users (
     password VARCHAR(255) NOT NULL,
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
-    role ENUM('student', 'admin', 'supervisor') DEFAULT 'student',
+    role ENUM('student', 'admin', 'supervisor', 'professor') DEFAULT 'student',
     is_active BOOLEAN DEFAULT TRUE
 );
 
@@ -18,6 +18,16 @@ CREATE TABLE departments (
     faculty_id INT NOT NULL,
     dept_name VARCHAR(100) NOT NULL,
     FOREIGN KEY (faculty_id) REFERENCES faculties(faculty_id)
+);
+
+CREATE TABLE professors (
+    professor_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL UNIQUE,
+    dept_id INT NOT NULL,
+    is_supervisor BOOLEAN DEFAULT FALSE,
+    office_number VARCHAR(50) NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id),
+    FOREIGN KEY (dept_id) REFERENCES departments(dept_id)
 );
 
 CREATE TABLE programs (
@@ -72,11 +82,11 @@ CREATE TABLE students (
     user_id INT NOT NULL,
     program_id INT NOT NULL,
     admission_year YEAR NOT NULL,
-    supervisor_id INT NULL,
+    supervisor_id INT NULL, -- Now points to professors table
     is_graduated BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
     FOREIGN KEY (program_id) REFERENCES programs(program_id),
-    FOREIGN KEY (supervisor_id) REFERENCES users(user_id)
+    FOREIGN KEY (supervisor_id) REFERENCES professors(professor_id)
 );
 
 CREATE TABLE program_requirements (
@@ -96,14 +106,15 @@ CREATE TABLE sections (
     course_id INT NOT NULL,
     semester_id INT NOT NULL,
     section_name VARCHAR(10),
-    professor_name VARCHAR(100),
+    professor_id INT NULL, -- Now points to professors table
     days VARCHAR(20),
     start_time TIME,
     end_time TIME,
     room_number VARCHAR(50),
     max_capacity INT DEFAULT 30,
     FOREIGN KEY (course_id) REFERENCES courses(course_id),
-    FOREIGN KEY (semester_id) REFERENCES semesters(semester_id)
+    FOREIGN KEY (semester_id) REFERENCES semesters(semester_id),
+    FOREIGN KEY (professor_id) REFERENCES professors(professor_id)
 );
 
 CREATE TABLE build_semester (

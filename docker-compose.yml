@@ -11,9 +11,8 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       # Bridges your local files to the Database's folder in perfect order
-      - ./database/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
-      - ./database/02_seed.sql:/docker-entrypoint-initdb.d/02_seed.sql
-      - ./database/03_historical_seed.sql:/docker-entrypoint-initdb.d/03_historical_seed.sql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql
 
   # The Node.js Backend
   server:
