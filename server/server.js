@@ -49,8 +49,6 @@ app.post('/login', (req, res) => {
 
 app.get('/api/supervisor/students/:user_id', (req, res) => {
     const supervisorUserId = req.params.user_id;
-
-    // FIXED: The unread_count subquery now correctly looks for messages RECEIVED by the supervisor and SENT by the student.
     const sql = `
         SELECT 
             st.student_id,
@@ -73,7 +71,6 @@ app.get('/api/supervisor/students/:user_id', (req, res) => {
         JOIN programs p ON st.program_id = p.program_id
         WHERE st.supervisor_id = ?
     `;
-
     db.query(sql, [supervisorUserId, supervisorUserId], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
@@ -122,22 +119,15 @@ app.get('/api/chat/history/:user1/:user2', (req, res) => {
 });
 
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
-
     socket.on('join_user_room', (userId) => {
         socket.join(`user_${userId}`);
-        console.log(`User ${userId} joined their personal room.`);
     });
 
     socket.on('send_message', (data) => {
         const { sender_id, receiver_id, content } = data;
-        
         const sql = `INSERT INTO messages (sender_id, receiver_id, content) VALUES (?, ?, ?)`;
         db.query(sql, [sender_id, receiver_id, content], (err, result) => {
-            if (err) {
-                console.error("Error saving message:", err);
-                return;
-            }
+            if (err) return console.error("Error saving message:", err);
             
             const newMessage = {
                 message_id: result.insertId,
@@ -151,10 +141,6 @@ io.on('connection', (socket) => {
             io.to(`user_${receiver_id}`).emit('receive_message', newMessage);
             io.to(`user_${sender_id}`).emit('receive_message', newMessage);
         });
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`User disconnected: ${socket.id}`);
     });
 });
 
@@ -173,10 +159,36 @@ app.get('/courses', (req, res) => {
     });
 });
 
+// --- UPDATED STUDENT SECTIONS ROUTE ---
 app.get('/sections', (req, res) => {
-    db.query('SELECT * FROM sections', (err, results) => {
+    const sql = `
+        SELECT s.*, 
+               (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.section_id AND e.status = 'undergoing') as official_count
+        FROM sections s
+    `;
+    db.query(sql, (err, sections) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
+        
+        db.query('SELECT selected_courses_json FROM build_semester WHERE status = "draft"', (err, drafts) => {
+            if (err) return res.status(500).json({ error: err.message });
+            
+            let draftCounts = {};
+            drafts.forEach(draft => {
+                let courses = [];
+                try { courses = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) {}
+                courses.forEach(c => {
+                    if (c.selected_section_id) {
+                        draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
+                    }
+                });
+            });
+
+            const finalSections = sections.map(sec => ({
+                ...sec,
+                enrolled_count: sec.official_count + (draftCounts[sec.section_id] || 0)
+            }));
+            res.json(finalSections);
+        });
     });
 });
 
@@ -305,6 +317,7 @@ app.get('/my-draft/:user_id', (req, res) => {
     });
 });
 
+// --- UPDATED SAVE-PLAN ROUTE (GATEKEEPER) ---
 app.post('/save-plan', (req, res) => {
     const { user_id, selectedCourses } = req.body;
     if (!selectedCourses || selectedCourses.length === 0) return res.status(400).json({ error: "No courses selected" });
@@ -322,18 +335,50 @@ app.post('/save-plan', (req, res) => {
             const max_year = studentResult[0].max_year > 10 ? 0 : studentResult[0].max_year; 
             const isFirstSem = open_semester_name.toLowerCase().includes('first') || open_semester_name.includes('1');
             const dynamic_year_number = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
-            const selected_courses_json = JSON.stringify(selectedCourses);
-
-            db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
-                if (draftResult.length > 0) {
-                    db.query('UPDATE build_semester SET selected_courses_json = ?, semester_id = ?, year_number = ?, status = "draft", updated_at = NOW() WHERE student_id = ?', [selected_courses_json, open_semester_id, dynamic_year_number, student_id], (err) => {
-                        if (err) return res.status(500).json({ error: err.message });
-                        res.json({ success: true });
+            
+            db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ? AND student_id != ?', [open_semester_id, student_id], (err, drafts) => {
+                if (err) return res.status(500).json({ error: err.message });
+                
+                let draftCounts = {};
+                drafts.forEach(draft => {
+                    let courses = [];
+                    try { courses = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) {}
+                    courses.forEach(c => {
+                        if (c.selected_section_id) {
+                            draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
+                        }
                     });
-                } else {
-                    db.query('INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")', [student_id, open_semester_id, dynamic_year_number, selected_courses_json], (err) => {
-                        if (err) return res.status(500).json({ error: err.message });
-                        res.json({ success: true });
+                });
+
+                const requestedSectionIds = selectedCourses.map(c => c.selected_section_id).filter(Boolean);
+                if (requestedSectionIds.length === 0) return proceedToSave();
+
+                db.query('SELECT section_id, max_capacity, section_name FROM sections WHERE section_id IN (?)', [requestedSectionIds], (err, sectionsInfo) => {
+                    if (err) return res.status(500).json({ error: err.message });
+
+                    for (let sec of sectionsInfo) {
+                        const taken = draftCounts[sec.section_id] || 0;
+                        if (taken >= sec.max_capacity) {
+                            return res.json({ success: false, error: `Section ${sec.section_name} is full! (Limit: ${sec.max_capacity}). Please choose a different section or time.` });
+                        }
+                    }
+                    proceedToSave();
+                });
+
+                function proceedToSave() {
+                    const selected_courses_json = JSON.stringify(selectedCourses);
+                    db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
+                        if (draftResult.length > 0) {
+                            db.query('UPDATE build_semester SET selected_courses_json = ?, semester_id = ?, year_number = ?, status = "draft", updated_at = NOW() WHERE student_id = ?', [selected_courses_json, open_semester_id, dynamic_year_number, student_id], (err) => {
+                                if (err) return res.status(500).json({ error: err.message });
+                                res.json({ success: true });
+                            });
+                        } else {
+                            db.query('INSERT INTO build_semester (student_id, semester_id, year_number, selected_courses_json, status) VALUES (?, ?, ?, ?, "draft")', [student_id, open_semester_id, dynamic_year_number, selected_courses_json], (err) => {
+                                if (err) return res.status(500).json({ error: err.message });
+                                res.json({ success: true });
+                            });
+                        }
                     });
                 }
             });
@@ -397,7 +442,7 @@ app.get('/admin/semester-board', (req, res) => {
         res.json(buttons);
     });
 });
-
+// --- UPDATED: Close Semester & Auto-Generate Sections for the Next One ---
 app.post('/admin/semester-action', (req, res) => {
     const { semester_id, action, semester_name, close_date } = req.body;
     
@@ -413,11 +458,9 @@ app.post('/admin/semester-action', (req, res) => {
             if (err) return res.status(500).json({error: err.message});
 
             let enrollmentsData = [];
-            
             plans.forEach(plan => {
                 let courses = [];
-                try { courses = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) { courses = []; }
-                
+                try { courses = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json; } catch(e) {}
                 courses.forEach(c => {
                     enrollmentsData.push([plan.student_id, c.selected_section_id || null, c.course_id, semester_id, plan.year_number, 'undergoing', c.placeholder_id || null]);
                 });
@@ -431,9 +474,28 @@ app.post('/admin/semester-action', (req, res) => {
                         const nextName = generateNextSemesterName(semester_name);
                         db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
                             const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
-                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err) => {
+                            
+                            // 1. Create the new empty semester
+                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err, newSemResult) => {
                                 if (err) return res.status(500).json({error: err.message});
-                                res.json({success: true});
+                                
+                                const new_semester_id = newSemResult.insertId;
+
+                                // 2. AUTO-GENERATE SECTIONS: Automatically populate the new semester with S1 and S2 for every course!
+                                const autoGenerateSQL1 = `
+                                    INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
+                                    SELECT course_id, ?, 'S1', 'Dr. Ahmad Mansour', 'Sun-Tue-Thu', '08:00:00', '09:20:00', 'Bldg 1-R106', 30 FROM courses
+                                `;
+                                const autoGenerateSQL2 = `
+                                    INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
+                                    SELECT course_id, ?, 'S2', 'Prof. Mustafa Osman', 'Mon-Wed', '10:00:00', '11:20:00', 'Bldg 2-R110', 30 FROM courses
+                                `;
+
+                                db.query(autoGenerateSQL1, [new_semester_id], () => {
+                                    db.query(autoGenerateSQL2, [new_semester_id], () => {
+                                        res.json({success: true});
+                                    });
+                                });
                             });
                         });
                     });
@@ -442,10 +504,7 @@ app.post('/admin/semester-action', (req, res) => {
 
             if (enrollmentsData.length > 0) {
                 db.query('INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, placeholder_id) VALUES ?', [enrollmentsData], (err) => {
-                    if (err) {
-                        console.error("Bulk Enrollment Error:", err);
-                        return res.status(500).json({error: err.message});
-                    }
+                    if (err) return res.status(500).json({error: err.message});
                     finalizeClose();
                 });
             } else {
@@ -455,10 +514,118 @@ app.post('/admin/semester-action', (req, res) => {
     }
 });
 
+// --- NEW: Remove a section entirely ---
+app.delete('/admin/sections/:id', (req, res) => {
+    db.query('DELETE FROM sections WHERE section_id = ?', [req.params.id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
 app.get('/admin/plans', (req, res) => {
     db.query(`SELECT bs.build_id, bs.selected_courses_json, bs.status, bs.year_number, s.semester_name, u.first_name, u.last_name, u.username as email FROM build_semester bs JOIN students st ON bs.student_id = st.student_id JOIN users u ON st.user_id = u.user_id JOIN semesters s ON bs.semester_id = s.semester_id WHERE bs.status = 'draft'`, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
+    });
+});
+
+// --- NEW: Add a New Section (Class) ---
+app.post('/admin/sections', (req, res) => {
+    const { course_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity } = req.body;
+
+    if (!course_id || !section_name || !days || !start_time || !end_time || !room_number || !max_capacity) {
+        return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Find the currently active/upcoming semester
+    const sqlSem = `SELECT semester_id FROM semesters WHERE is_completed = FALSE ORDER BY semester_id ASC LIMIT 1`;
+    
+    db.query(sqlSem, (err, semResult) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (semResult.length === 0) return res.status(400).json({ error: "No active semester available." });
+
+        const semester_id = semResult[0].semester_id;
+
+        // Insert the new class section
+        const sql = `
+            INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        
+        db.query(sql, [course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity], (err, result) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ success: true, section_id: result.insertId });
+        });
+    });
+});
+
+// --- NEW ADMIN ROUTES (Capacity Management) ---
+app.get('/admin/sections', (req, res) => {
+    const sqlSem = `SELECT semester_id, semester_name FROM semesters WHERE is_completed = FALSE ORDER BY semester_id ASC LIMIT 1`;
+    
+    db.query(sqlSem, (err, semResult) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (semResult.length === 0) return res.json([]); 
+
+        const targetSemesterId = semResult[0].semester_id;
+
+        const sql = `
+            SELECT 
+                s.section_id, 
+                c.course_prefix, 
+                c.course_number, 
+                c.course_name, 
+                s.section_name, 
+                s.max_capacity,
+                (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.section_id AND e.status = 'undergoing') as enrolled_count
+            FROM sections s
+            JOIN courses c ON s.course_id = c.course_id
+            WHERE s.semester_id = ?
+            ORDER BY c.course_prefix, c.course_number, s.section_name
+        `;
+        
+        db.query(sql, [targetSemesterId], (err, sections) => {
+            if (err) return res.status(500).json({ error: err.message });
+            
+            db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ?', [targetSemesterId], (err, drafts) => {
+                if (err) return res.status(500).json({ error: err.message });
+                
+                let draftCounts = {};
+                drafts.forEach(draft => {
+                    let courses = [];
+                    try { courses = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) {}
+                    courses.forEach(c => {
+                        if (c.selected_section_id) {
+                            draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
+                        }
+                    });
+                });
+
+                const finalSections = sections.map(sec => {
+                    const drafted = draftCounts[sec.section_id] || 0;
+                    return {
+                        ...sec,
+                        enrolled_count: sec.enrolled_count + drafted
+                    };
+                });
+
+                res.json(finalSections);
+            });
+        });
+    });
+});
+
+app.put('/admin/sections/:id/capacity', (req, res) => {
+    const { id } = req.params;
+    const { max_capacity } = req.body;
+    
+    if (!max_capacity || isNaN(max_capacity)) {
+        return res.status(400).json({ error: "Invalid capacity provided" });
+    }
+
+    db.query('UPDATE sections SET max_capacity = ? WHERE section_id = ?', [parseInt(max_capacity), id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
     });
 });
 
@@ -501,6 +668,35 @@ app.get('/api/recommendations/:user_id', (req, res) => {
                     .map(course => ({ ...course, priorityScore: course.weight }))
                     .sort((a, b) => b.priorityScore - a.priorityScore);
                 res.json(recommendations);
+            });
+        });
+    });
+});
+
+// --- NEW: Simulate End of Semester (Mass Grade 'Undergoing' Courses) ---
+app.post('/admin/finalize-grades', (req, res) => {
+    db.query("SELECT enrollment_id FROM enrollments WHERE status = 'undergoing'", (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (results.length === 0) {
+            return res.json({ success: true, message: "No undergoing courses found to grade." });
+        }
+
+        const grades = ['A+', 'A', 'B+', 'B', 'C+', 'C'];
+        let completed = 0;
+        let hasError = false;
+
+        results.forEach(row => {
+            const randomGrade = grades[Math.floor(Math.random() * grades.length)];
+            db.query("UPDATE enrollments SET status = 'completed', grade = ? WHERE enrollment_id = ?", [randomGrade, row.enrollment_id], (err) => {
+                if (err && !hasError) {
+                    hasError = true;
+                    return res.status(500).json({ error: err.message });
+                }
+                completed++;
+                if (completed === results.length && !hasError) {
+                    res.json({ success: true });
+                }
             });
         });
     });
