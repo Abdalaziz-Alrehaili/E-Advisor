@@ -11,13 +11,60 @@ function AdminDashboard() {
   const [sectionsList, setSectionsList] = useState([]);
   const [editCapacityPrompt, setEditCapacityPrompt] = useState(null);
   const [newCapacity, setNewCapacity] = useState('');
-  
-  // --- NEW: State for Search Functionality ---
   const [searchTerm, setSearchTerm] = useState('');
+
+  // --- NEW: State & Data for Adding Classes ---
+  const [allCourses, setAllCourses] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  
+  // Pre-defined options based on your database seed
+  const predefinedProfessors = [
+    'Dr. Ahmad Mansour', 'Dr. Khaled Al-Sayed', 'Prof. Mustafa Osman',
+    'Dr. Ibrahim Hassan', 'Dr. Omar Bakri', 'Dr. Sami Al-Qahtani',
+    'Dr. Yahya Jameel', 'Prof. Nasser Idris', 'Dr. Suleiman Taha', 'Dr. Waleed Saeed'
+  ];
+  
+  const predefinedRooms = [
+    'Bldg 1-R106', 'Bldg 1-R114', 'Bldg 1-R116', 'Bldg 1-R118', 'Bldg 1-R133', 'Bldg 1-R135', 'Bldg 1-R141', 'Bldg 1-R147',
+    'Bldg 2-R106', 'Bldg 2-R110', 'Bldg 2-R138', 'Bldg 2-R147',
+    'Bldg 3-R100', 'Bldg 3-R101', 'Bldg 3-R106', 'Bldg 3-R112', 'Bldg 3-R119', 'Bldg 3-R122', 'Bldg 3-R126', 'Bldg 3-R130', 'Bldg 3-R138', 'Bldg 3-R139', 'Bldg 3-R149'
+  ];
+
+  // The custom time slots exactly as requested!
+  const predefinedTimeSlots = [
+    { label: 'Sun-Tue-Thu (08:00 AM - 09:20 AM)', days: 'Sun-Tue-Thu', start: '08:00:00', end: '09:20:00' },
+    { label: 'Mon-Wed (08:00 AM - 09:20 AM)', days: 'Mon-Wed', start: '08:00:00', end: '09:20:00' },
+    { label: 'Sun-Tue-Thu (10:00 AM - 11:00 AM)', days: 'Sun-Tue-Thu', start: '10:00:00', end: '11:00:00' },
+    { label: 'Mon-Wed (10:00 AM - 11:20 AM)', days: 'Mon-Wed', start: '10:00:00', end: '11:20:00' },
+    { label: 'Sun-Tue-Thu (01:00 PM - 02:20 PM)', days: 'Sun-Tue-Thu', start: '13:00:00', end: '14:20:00' },
+    { label: 'Mon-Wed (01:00 PM - 02:20 PM)', days: 'Mon-Wed', start: '13:00:00', end: '14:20:00' }
+  ];
+
+  const [addFormData, setAddFormData] = useState({
+      course_id: '',
+      section_name: 'S3', // Defaults to S3 assuming S1 and S2 exist
+      professor_name: predefinedProfessors[0],
+      timeSlotIndex: 0,
+      room_number: predefinedRooms[0],
+      max_capacity: 30
+  });
 
   useEffect(() => {
     fetchBoard();
     fetchSections();
+    
+    // Fetch all courses so the Admin can pick which course to add a section for
+    fetch('http://localhost:5000/courses')
+        .then(res => res.json())
+        .then(data => {
+            // Sort them nicely (e.g., CPIS-210, CPIS-220)
+            const sorted = data.sort((a,b) => (a.course_prefix+a.course_number).localeCompare(b.course_prefix+b.course_number));
+            setAllCourses(sorted);
+            if(sorted.length > 0) {
+                setAddFormData(prev => ({ ...prev, course_id: sorted[0].course_id }));
+            }
+        })
+        .catch(err => console.error("Error fetching courses:", err));
   }, []);
 
   const fetchBoard = () => {
@@ -94,7 +141,42 @@ function AdminDashboard() {
       .catch(err => console.error("Update error:", err));
   };
 
-  // --- NEW: Filter the sections based on the search term ---
+  // --- NEW: Function to submit the new Class Section ---
+  const handleAddNewSection = (e) => {
+      e.preventDefault();
+      
+      const selectedTime = predefinedTimeSlots[addFormData.timeSlotIndex];
+      
+      const payload = {
+          course_id: addFormData.course_id,
+          section_name: addFormData.section_name,
+          professor_name: addFormData.professor_name,
+          days: selectedTime.days,
+          start_time: selectedTime.start,
+          end_time: selectedTime.end,
+          room_number: addFormData.room_number,
+          max_capacity: addFormData.max_capacity
+      };
+
+      fetch('http://localhost:5000/admin/sections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+      })
+      .then(res => res.json())
+      .then(data => {
+          if (data.success) {
+              fetchSections(); // Refresh the table
+              setShowAddModal(false); // Close the modal
+              // Reset the section name to S4, S5 etc to make adding multiples easy
+              setAddFormData(prev => ({ ...prev, section_name: 'S' + (parseInt(prev.section_name.replace('S', '')) + 1) }));
+          } else {
+              alert("Error adding section: " + data.error);
+          }
+      })
+      .catch(err => console.error("Error adding section:", err));
+  };
+
   const filteredSections = sectionsList.filter(sec => {
       const search = searchTerm.toLowerCase();
       const courseCode = `${sec.course_prefix}-${sec.course_number}`.toLowerCase();
@@ -142,23 +224,33 @@ function AdminDashboard() {
           ))}
         </div>
 
-        {/* --- CAPACITY MANAGER WITH SEARCH BAR --- */}
+        {/* --- CAPACITY MANAGER WITH SEARCH BAR & ADD BUTTON --- */}
         <div className="w-100 mt-5 pt-4 border-top" style={{ maxWidth: '1400px', margin: '0 auto' }}>
             
             <div className="d-flex justify-content-between align-items-center mb-4">
                 <h2 className="fw-bold m-0" style={{ color: '#104929' }}>Course Section Capacities</h2>
                 
-                {/* --- NEW: Search Bar UI --- */}
-                <div className="position-relative" style={{ width: '350px' }}>
-                    <i className="bi bi-search search-icon"></i>
-                    <input 
-                        type="text" 
-                        className="form-control rounded-pill shadow-sm" 
-                        placeholder="Search by course code or name..." 
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        style={{ paddingLeft: '40px', border: '1px solid #ced4da' }}
-                    />
+                <div className="d-flex gap-3 align-items-center">
+                    <div className="position-relative" style={{ width: '350px' }}>
+                        <i className="bi bi-search search-icon"></i>
+                        <input 
+                            type="text" 
+                            className="form-control rounded-pill shadow-sm" 
+                            placeholder="Search by course code or name..." 
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            style={{ paddingLeft: '40px', border: '1px solid #ced4da' }}
+                        />
+                    </div>
+                    
+                    {/* NEW: Add Class Button */}
+                    <button 
+                        className="btn fw-bold shadow-sm d-flex align-items-center gap-2 px-4" 
+                        style={{ backgroundColor: '#104929', color: 'white', borderRadius: '30px' }}
+                        onClick={() => setShowAddModal(true)}
+                    >
+                        <i className="bi bi-plus-lg"></i> Add Section
+                    </button>
                 </div>
             </div>
 
@@ -213,8 +305,99 @@ function AdminDashboard() {
                 </table>
             </div>
         </div>
-
       </div>
+
+      {/* --- ADD NEW SECTION MODAL --- */}
+      {showAddModal && (
+          <div className="modal-overlay">
+             <div className="bg-white rounded text-start" style={{ width: '600px', padding: '40px', borderTop: '8px solid #104929', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', maxHeight: '90vh', overflowY: 'auto' }}>
+                <h3 className="fw-bold mb-1" style={{ color: '#104929' }}>Add New Class Section</h3>
+                <p className="text-muted mb-4 border-bottom pb-3">Open a new section for the upcoming semester.</p>
+
+                <form onSubmit={handleAddNewSection}>
+                    <div className="mb-3">
+                        <label className="fw-bold mb-1">Select Course:</label>
+                        <select 
+                            className="form-select" 
+                            value={addFormData.course_id}
+                            onChange={(e) => setAddFormData({...addFormData, course_id: e.target.value})}
+                            required
+                        >
+                            {allCourses.map(c => (
+                                <option key={c.course_id} value={c.course_id}>
+                                    {c.course_prefix}-{c.course_number}: {c.course_name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="row mb-3">
+                        <div className="col-md-4">
+                            <label className="fw-bold mb-1">Section ID:</label>
+                            <input 
+                                type="text" 
+                                className="form-control fw-bold" 
+                                value={addFormData.section_name}
+                                onChange={(e) => setAddFormData({...addFormData, section_name: e.target.value})}
+                                required
+                            />
+                        </div>
+                        <div className="col-md-8">
+                            <label className="fw-bold mb-1">Max Capacity:</label>
+                            <input 
+                                type="number" 
+                                className="form-control fw-bold" 
+                                min="1"
+                                value={addFormData.max_capacity}
+                                onChange={(e) => setAddFormData({...addFormData, max_capacity: parseInt(e.target.value)})}
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div className="mb-3">
+                        <label className="fw-bold mb-1">Assign Professor:</label>
+                        <select 
+                            className="form-select" 
+                            value={addFormData.professor_name}
+                            onChange={(e) => setAddFormData({...addFormData, professor_name: e.target.value})}
+                        >
+                            {predefinedProfessors.map((p, i) => <option key={i} value={p}>{p}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="mb-3">
+                        <label className="fw-bold mb-1">Days & Time Slot:</label>
+                        <select 
+                            className="form-select" 
+                            value={addFormData.timeSlotIndex}
+                            onChange={(e) => setAddFormData({...addFormData, timeSlotIndex: e.target.value})}
+                        >
+                            {predefinedTimeSlots.map((ts, i) => (
+                                <option key={i} value={i}>{ts.label}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="mb-4">
+                        <label className="fw-bold mb-1">Room Assignment:</label>
+                        <select 
+                            className="form-select" 
+                            value={addFormData.room_number}
+                            onChange={(e) => setAddFormData({...addFormData, room_number: e.target.value})}
+                        >
+                            {predefinedRooms.map((r, i) => <option key={i} value={r}>{r}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="d-flex justify-content-end gap-3 mt-4 pt-3 border-top">
+                        <button type="button" className="btn btn-secondary fw-bold px-4 py-2" onClick={() => setShowAddModal(false)}>Cancel</button>
+                        <button type="submit" className="btn fw-bold px-4 py-2" style={{ backgroundColor: '#104929', color: 'white' }}>Create Section</button>
+                    </div>
+                </form>
+             </div>
+          </div>
+      )}
 
       {openPrompt && (
         <div className="modal-overlay">

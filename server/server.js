@@ -49,8 +49,6 @@ app.post('/login', (req, res) => {
 
 app.get('/api/supervisor/students/:user_id', (req, res) => {
     const supervisorUserId = req.params.user_id;
-
-    // FIXED: The unread_count subquery now correctly looks for messages RECEIVED by the supervisor and SENT by the student.
     const sql = `
         SELECT 
             st.student_id,
@@ -73,7 +71,6 @@ app.get('/api/supervisor/students/:user_id', (req, res) => {
         JOIN programs p ON st.program_id = p.program_id
         WHERE st.supervisor_id = ?
     `;
-
     db.query(sql, [supervisorUserId, supervisorUserId], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
@@ -122,22 +119,15 @@ app.get('/api/chat/history/:user1/:user2', (req, res) => {
 });
 
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
-
     socket.on('join_user_room', (userId) => {
         socket.join(`user_${userId}`);
-        console.log(`User ${userId} joined their personal room.`);
     });
 
     socket.on('send_message', (data) => {
         const { sender_id, receiver_id, content } = data;
-        
         const sql = `INSERT INTO messages (sender_id, receiver_id, content) VALUES (?, ?, ?)`;
         db.query(sql, [sender_id, receiver_id, content], (err, result) => {
-            if (err) {
-                console.error("Error saving message:", err);
-                return;
-            }
+            if (err) return console.error("Error saving message:", err);
             
             const newMessage = {
                 message_id: result.insertId,
@@ -151,10 +141,6 @@ io.on('connection', (socket) => {
             io.to(`user_${receiver_id}`).emit('receive_message', newMessage);
             io.to(`user_${sender_id}`).emit('receive_message', newMessage);
         });
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`User disconnected: ${socket.id}`);
     });
 });
 
@@ -173,10 +159,36 @@ app.get('/courses', (req, res) => {
     });
 });
 
+// --- UPDATED STUDENT SECTIONS ROUTE ---
 app.get('/sections', (req, res) => {
-    db.query('SELECT * FROM sections', (err, results) => {
+    const sql = `
+        SELECT s.*, 
+               (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.section_id AND e.status = 'undergoing') as official_count
+        FROM sections s
+    `;
+    db.query(sql, (err, sections) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
+        
+        db.query('SELECT selected_courses_json FROM build_semester WHERE status = "draft"', (err, drafts) => {
+            if (err) return res.status(500).json({ error: err.message });
+            
+            let draftCounts = {};
+            drafts.forEach(draft => {
+                let courses = [];
+                try { courses = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; } catch(e) {}
+                courses.forEach(c => {
+                    if (c.selected_section_id) {
+                        draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
+                    }
+                });
+            });
+
+            const finalSections = sections.map(sec => ({
+                ...sec,
+                enrolled_count: sec.official_count + (draftCounts[sec.section_id] || 0)
+            }));
+            res.json(finalSections);
+        });
     });
 });
 
@@ -305,7 +317,7 @@ app.get('/my-draft/:user_id', (req, res) => {
     });
 });
 
-// --- UPDATED: Save Plan with Capacity Gatekeeper ---
+// --- UPDATED SAVE-PLAN ROUTE (GATEKEEPER) ---
 app.post('/save-plan', (req, res) => {
     const { user_id, selectedCourses } = req.body;
     if (!selectedCourses || selectedCourses.length === 0) return res.status(400).json({ error: "No courses selected" });
@@ -324,8 +336,6 @@ app.post('/save-plan', (req, res) => {
             const isFirstSem = open_semester_name.toLowerCase().includes('first') || open_semester_name.includes('1');
             const dynamic_year_number = isFirstSem ? max_year + 1 : (max_year === 0 ? 1 : max_year);
             
-            // --- NEW: CAPACITY CHECK LOGIC ---
-            // Fetch all OTHER students' drafts for this semester
             db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ? AND student_id != ?', [open_semester_id, student_id], (err, drafts) => {
                 if (err) return res.status(500).json({ error: err.message });
                 
@@ -343,21 +353,18 @@ app.post('/save-plan', (req, res) => {
                 const requestedSectionIds = selectedCourses.map(c => c.selected_section_id).filter(Boolean);
                 if (requestedSectionIds.length === 0) return proceedToSave();
 
-                // Cross-reference requested sections with max capacities
                 db.query('SELECT section_id, max_capacity, section_name FROM sections WHERE section_id IN (?)', [requestedSectionIds], (err, sectionsInfo) => {
                     if (err) return res.status(500).json({ error: err.message });
 
                     for (let sec of sectionsInfo) {
                         const taken = draftCounts[sec.section_id] || 0;
                         if (taken >= sec.max_capacity) {
-                            // BLOCK SAVE: Send error back to the React UI
                             return res.json({ success: false, error: `Section ${sec.section_name} is full! (Limit: ${sec.max_capacity}). Please choose a different section or time.` });
                         }
                     }
                     proceedToSave();
                 });
 
-                // Function to save if capacities check out
                 function proceedToSave() {
                     const selected_courses_json = JSON.stringify(selectedCourses);
                     db.query('SELECT build_id FROM build_semester WHERE student_id = ?', [student_id], (err, draftResult) => {
@@ -500,7 +507,37 @@ app.get('/admin/plans', (req, res) => {
     });
 });
 
-// --- UPDATED: Fetch sections and count DRAFTED seats ---
+// --- NEW: Add a New Section (Class) ---
+app.post('/admin/sections', (req, res) => {
+    const { course_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity } = req.body;
+
+    if (!course_id || !section_name || !days || !start_time || !end_time || !room_number || !max_capacity) {
+        return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Find the currently active/upcoming semester
+    const sqlSem = `SELECT semester_id FROM semesters WHERE is_completed = FALSE ORDER BY semester_id ASC LIMIT 1`;
+    
+    db.query(sqlSem, (err, semResult) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (semResult.length === 0) return res.status(400).json({ error: "No active semester available." });
+
+        const semester_id = semResult[0].semester_id;
+
+        // Insert the new class section
+        const sql = `
+            INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        
+        db.query(sql, [course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity], (err, result) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ success: true, section_id: result.insertId });
+        });
+    });
+});
+
+// --- NEW ADMIN ROUTES (Capacity Management) ---
 app.get('/admin/sections', (req, res) => {
     const sqlSem = `SELECT semester_id, semester_name FROM semesters WHERE is_completed = FALSE ORDER BY semester_id ASC LIMIT 1`;
     
@@ -528,7 +565,6 @@ app.get('/admin/sections', (req, res) => {
         db.query(sql, [targetSemesterId], (err, sections) => {
             if (err) return res.status(500).json({ error: err.message });
             
-            // NEW: Fetch all drafted plans and parse them to count taken seats
             db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ?', [targetSemesterId], (err, drafts) => {
                 if (err) return res.status(500).json({ error: err.message });
                 
@@ -543,7 +579,6 @@ app.get('/admin/sections', (req, res) => {
                     });
                 });
 
-                // Combine official enrollments + drafted seats
                 const finalSections = sections.map(sec => {
                     const drafted = draftCounts[sec.section_id] || 0;
                     return {
@@ -558,7 +593,6 @@ app.get('/admin/sections', (req, res) => {
     });
 });
 
-// --- NEW: Update the max capacity of a specific section ---
 app.put('/admin/sections/:id/capacity', (req, res) => {
     const { id } = req.params;
     const { max_capacity } = req.body;
