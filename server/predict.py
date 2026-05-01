@@ -46,8 +46,8 @@ try:
     # 4. Ask the AI for the prediction!
     predicted_grade = model.predict(X)[0]
     
-    # 5. Cap the grade between 0 and 100, then round it
-    final_grade = max(0, min(100, round(predicted_grade)))
+    # 5. Cap the grade between 0 and 100, keep 1 decimal point for UI variance!
+    final_grade = round(max(0.0, min(100.0, float(predicted_grade))), 1)
     
     # 6. Send the answer back to Node.js
     print(json.dumps({"success": True, "predicted_grade": final_grade}))

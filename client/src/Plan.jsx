@@ -14,6 +14,10 @@ function Plan({ user }) {
   const [hoveredCourseId, setHoveredCourseId] = useState(null);
   const hoverTimerRef = useRef(null);
 
+  // --- AI PREDICTION STATES ---
+  const [predictions, setPredictions] = useState({});
+  const [isPredicting, setIsPredicting] = useState(false);
+
   // Modal State
   const [showModal, setShowModal] = useState(false);
   const [previewCourse, setPreviewCourse] = useState(null);
@@ -64,6 +68,127 @@ function Plan({ user }) {
     }
   }, [user]);
 
+  // ==========================================
+  // HARDCODED KNOWLEDGE BASE (HISTORICAL AVERAGES)
+  // ==========================================
+  const COURSE_DATA_DICTIONARY = {
+      'ELIS-101': 93, 'ELIS-102': 87, 'ELIS-103': 86, 'ELIS-104': 85,
+      'ISLS-101': 86, 'ISLS-201': 94, 'ISLS-301': 93, 'ISLS-401': 95,
+      'ARAB-101': 83, 'ARAB-201': 91,
+      'MATH-110': 77, 'STAT-110': 79, 'PHYS-110': 80, 'BIO-110': 88, 'CHEM-110': 79,
+      'STAT-210': 71,
+      'BUS-232': 88, 'BUS-433': 87,
+      'MRKT-260': 89, 'ACCT-333': 84, 'MRKC-323': 90, 'PR-211': 91, 'COMM-101': 93,
+      'CPCS-202': 82, 'CPCS-222': 80, 'CPCS-203': 78, 'CPCS-204': 76,
+      'CPIT-110': 79, 'CPIT-201': 85, 'CPIT-221': 90,
+      'CPIS-210': 80, 'CPIS-220': 90, 'CPIS-222': 73, 'CPIS-240': 86, 'CPIS-250': 88,
+      'CPIS-312': 79, 'CPIS-320': 89, 'CPIS-323': 96, 'CPIS-334': 89, 'CPIS-342': 79,
+      'CPIS-350': 87, 'CPIS-351': 89, 'CPIS-352': 86, 'CPIS-354': 91, 'CPIS-357': 88,
+      'CPIS-358': 84, 'CPIS-363': 87, 'CPIS-370': 79, 'CPIS-380': 91, 'CPIS-420': 86,
+      'CPIS-428': 88, 'CPIS-434': 86, 'CPIS-486': 88, 'CPIS-498': 92, 'CPIS-499': 88
+  };
+
+  const getHistoricalStats = (course) => {
+      if (!course) return { courseAvg: 85, profAvg: 85 };
+      const key = `${(course.course_prefix || '').toUpperCase()}-${course.course_number || ''}`;
+      
+      const courseAvg = COURSE_DATA_DICTIONARY[key] || 85; 
+      
+      const profOffset = ((course.selected_section_id || 1) % 5) - 2; 
+      const profAvg = courseAvg + profOffset;
+
+      return { courseAvg, profAvg };
+  };
+
+  const calculateCurrentGPA = () => {
+      let totalPoints = 0;
+      let totalCr = 0;
+      curriculum.filter(c => c.status === 'completed' && c.grade).forEach(c => {
+          let p = 1.0;
+          if(c.grade >= 95) p = 5.0; else if(c.grade >= 90) p = 4.75; 
+          else if(c.grade >= 85) p = 4.5; else if(c.grade >= 80) p = 4.0; 
+          else if(c.grade >= 75) p = 3.5; else if(c.grade >= 70) p = 3.0; 
+          else if(c.grade >= 65) p = 2.5; else if(c.grade >= 60) p = 2.0;
+          totalPoints += (p * (Number(c.credits) || 3));
+          totalCr += (Number(c.credits) || 3);
+      });
+      return totalCr > 0 ? (totalPoints / totalCr) : 0;
+  };
+
+  const currentGPA = calculateCurrentGPA();
+  const totalCompletedCredits = curriculum
+    .filter(c => c.status === 'completed')
+    .reduce((sum, c) => sum + (Number(c.credits) || 0), 0);
+
+  const totalCredits = selectedCourses.reduce((sum, c) => sum + (Number(c.credits) ?? 0), 0);
+  const isSummer = draftPlan?.semester_name?.toLowerCase().includes('summer');
+  const minCredits = isSummer ? 0 : 10;
+  const maxCredits = isSummer ? 9 : 20;
+  const isInvalidLoad = totalCredits < minCredits || totalCredits > maxCredits;
+
+  // --- NEW: AI Prediction Trigger (Simultaneous Individual Fetches) ---
+  useEffect(() => {
+      if (isInvalidLoad || selectedCourses.length === 0) {
+          setPredictions({});
+          return;
+      }
+
+      const fetchPredictions = async () => {
+          setIsPredicting(true);
+          
+          const avgDifficulty = selectedCourses.reduce((sum, c) => sum + getHistoricalStats(c).courseAvg, 0) / selectedCourses.length;
+          
+          const predictionPromises = selectedCourses.map(async (course) => {
+              const { courseAvg, profAvg } = getHistoricalStats(course);
+              
+              const payload = {
+                  course_credits: Number(course.credits) || 3,
+                  is_summer: isSummer ? 1 : 0,
+                  course_historical_average: courseAvg, 
+                  prof_historical_average: profAvg,
+                  prof_course_specific_average: profAvg - 1,
+                  credits_completed_before: totalCompletedCredits,
+                  cumulative_gpa_before: currentGPA === 0 ? 4.0 : currentGPA,
+                  attempted_semester_credits: totalCredits,
+                  current_schedule_difficulty: avgDifficulty
+              };
+
+              try {
+                  const res = await fetch('http://localhost:5000/api/predict', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(payload)
+                  });
+                  const data = await res.json();
+                  
+                  if (data.success) {
+                      return { id: course.course_id, grade: data.predicted_grade };
+                  }
+              } catch (err) {
+                  console.error("Prediction failed for course", course.course_id, err);
+              }
+              return { id: course.course_id, grade: 85.0 };
+          });
+
+          const results = await Promise.all(predictionPromises);
+          
+          const newPredictions = {};
+          results.forEach(res => {
+              newPredictions[res.id] = res.grade;
+          });
+          
+          setPredictions(newPredictions);
+          setIsPredicting(false);
+      };
+
+      const timer = setTimeout(() => {
+          fetchPredictions();
+      }, 1500);
+
+      return () => clearTimeout(timer);
+  }, [selectedCourses, isInvalidLoad, totalCredits, isSummer, totalCompletedCredits, currentGPA]);
+
+
   const handleConfirmPlan = () => {
     const missingSections = selectedCourses.some(c => !c.selected_section_id);
     if (missingSections) {
@@ -93,11 +218,6 @@ function Plan({ user }) {
     });
   };
 
-  // --- NEW: Calculate Total Completed Credits ---
-  const totalCompletedCredits = curriculum
-    .filter(c => c.status === 'completed')
-    .reduce((sum, c) => sum + (Number(c.credits) || 0), 0);
-
   const checkPrereqsMet = (courseId) => {
     const reqsForThisCourse = prerequisites.filter(p => p.course_id === courseId);
     for (let req of reqsForThisCourse) {
@@ -107,18 +227,13 @@ function Plan({ user }) {
     return true;
   };
 
-  // --- NEW: Credit Requirement Lock Logic ---
   const checkCreditRequirements = (course) => {
       if (!course) return true;
       const prefix = (course.course_prefix || '').toUpperCase();
       const number = (course.course_number || '');
       
-      if (prefix === 'CPIS' && number === '323') {
-          return totalCompletedCredits >= 80;
-      }
-      if (prefix === 'CPIS' && number === '498') {
-          return totalCompletedCredits >= 100;
-      }
+      if (prefix === 'CPIS' && number === '323') return totalCompletedCredits >= 80;
+      if (prefix === 'CPIS' && number === '498') return totalCompletedCredits >= 100;
       return true;
   };
 
@@ -215,14 +330,6 @@ function Plan({ user }) {
     acc[termLabel].push(course);
     return acc;
   }, {});
-
-  const totalCredits = selectedCourses.reduce((sum, c) => sum + (Number(c.credits) ?? 0), 0);
-  
-  const isSummer = draftPlan?.semester_name?.toLowerCase().includes('summer');
-  const minCredits = isSummer ? 0 : 10;
-  const maxCredits = isSummer ? 9 : 20;
-  const isInvalidLoad = totalCredits < minCredits || totalCredits > maxCredits;
-
   const getProgress = () => {
       let elecComp = 0, freeComp = 0;
       let elecPlan = 0, freePlan = 0;
@@ -381,6 +488,101 @@ function Plan({ user }) {
     .map(c => ({ ...c, ...sections.find(s => s.section_id === parseInt(c.selected_section_id)) }))
     .filter(s => s.start_time && s.end_time);
 
+  const gradeToGPA = (grade) => {
+      if (!grade) return 0;
+      if(grade >= 95) return 5.0; if(grade >= 90) return 4.75;
+      if(grade >= 85) return 4.5; if(grade >= 80) return 4.0;
+      if(grade >= 75) return 3.5; if(grade >= 70) return 3.0;
+      if(grade >= 65) return 2.5; if(grade >= 60) return 2.0;
+      return 1.0;
+  };
+
+  let predictedSemPoints = 0;
+  selectedCourses.forEach(c => {
+      const grade = predictions[c.course_id] || 85; 
+      predictedSemPoints += (gradeToGPA(grade) * (Number(c.credits) || 3));
+  });
+
+  const predictedSemesterGPA = totalCredits > 0 ? (predictedSemPoints / totalCredits) : 0;
+  const currentTotalPoints = currentGPA * totalCompletedCredits;
+  const newCumulativeGPA = (totalCompletedCredits + totalCredits) > 0 ? ((currentTotalPoints + predictedSemPoints) / (totalCompletedCredits + totalCredits)) : 0;
+  const gpaChange = newCumulativeGPA - currentGPA;
+  
+  // --- PROGRAM COMPLETION LOGIC ---
+  const totalProgramCredits = 140; 
+  
+  // 1. Ahead or Behind Logic (NOW DYNAMICALLY CALCULATED EVERY RENDER!)
+  const getAcademicStatus = () => {
+      const admissionYear = 2023; 
+      const currentYear = 2026; 
+      let yearsEnrolled = currentYear - admissionYear;
+      if (yearsEnrolled <= 0) yearsEnrolled = 1; 
+
+      const creditsPerYear = totalProgramCredits / 5; 
+      let expectedCredits = Math.round(yearsEnrolled * creditsPerYear);
+      if (expectedCredits > totalProgramCredits) expectedCredits = totalProgramCredits;
+
+      // THE FIX: We now include totalCredits (the courses you just clicked) in the calculation!
+      const currentAndPlannedCredits = totalCompletedCredits + totalCredits;
+      const difference = currentAndPlannedCredits - expectedCredits;
+      
+      if (expectedCredits === 0) return { label: 'On Track', color: 'text-primary' };
+      
+      const rawPct = (difference / expectedCredits) * 100;
+      const pct = Math.abs(Math.round(rawPct));
+
+      if (rawPct > 5) return { label: `${pct}% Ahead`, color: 'text-success' };
+      if (rawPct < -5) return { label: `${pct}% Behind`, color: 'text-danger' };
+      return { label: 'On Track', color: 'text-primary' };
+  };
+  const progressStatus = getAcademicStatus();
+
+  // 2. Critical Path DAG Algorithm (Minimum Semesters Left)
+  const calculateMinSemesters = () => {
+      const remainingCredits = Math.max(0, totalProgramCredits - (totalCompletedCredits + totalCredits));
+      
+      // A. Capacity constraint
+      let creds = remainingCredits;
+      let credSems = 0;
+      while (creds > 0) {
+          credSems++;
+          if (credSems % 3 === 0) creds -= 10; 
+          else creds -= 20; 
+      }
+
+      // B. Prerequisite Bottleneck constraint (DAG Depth)
+      const remainingCourses = curriculum.filter(c => 
+          c.status !== 'completed' && 
+          c.status !== 'undergoing' && 
+          !selectedCourses.some(sc => sc.course_id === c.course_id || sc.placeholder_id === c.course_id)
+      );
+
+      const depthMap = {};
+      remainingCourses.forEach(c => depthMap[c.course_id] = 1);
+
+      let changed = true;
+      while (changed) {
+          changed = false;
+          for (let course of remainingCourses) {
+              const reqs = prerequisites.filter(p => p.course_id === course.course_id);
+              let maxReqDepth = 0;
+              for (let req of reqs) {
+                  if (depthMap[req.prereq_id]) {
+                      maxReqDepth = Math.max(maxReqDepth, depthMap[req.prereq_id]);
+                  }
+              }
+              if (depthMap[course.course_id] < maxReqDepth + 1) {
+                  depthMap[course.course_id] = maxReqDepth + 1;
+                  changed = true;
+              }
+          }
+      }
+
+      const maxDagDepth = remainingCourses.length > 0 ? Math.max(...Object.values(depthMap)) : 0;
+      return Math.max(credSems, maxDagDepth);
+  };
+  const minSemestersLeft = calculateMinSemesters();
+
   return (
     <div className="container-fluid plan-page-container bg-light min-vh-100 py-5">
       <style>{`
@@ -397,6 +599,10 @@ function Plan({ user }) {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(16, 73, 41, 0.2); border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(16, 73, 41, 0.4); }
+
+        .dashboard-locked { background: linear-gradient(135deg, #104929 0%, #0a2e1a 100%); color: white; position: relative; overflow: hidden; }
+        .dashboard-locked::after { content: ''; position: absolute; top: 0; left: -100%; width: 50%; height: 100%; background: linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent); transform: skewX(-25deg); animation: shine 3s infinite; }
+        @keyframes shine { 0% { left: -100%; } 100% { left: 200%; } }
       `}</style>
 
       <div className="container p-0">
@@ -492,9 +698,8 @@ function Plan({ user }) {
                         const isOngoing = course.status === 'undergoing';
                         
                         const prereqsMet = checkPrereqsMet(course.course_id);
-                        const creditsMet = checkCreditRequirements(course); // NEW: Credit Check
+                        const creditsMet = checkCreditRequirements(course);
 
-                        // A course is only available if both prereqs AND credits are met
                         const isLocked = !isPassed && !isOngoing && (!prereqsMet || !creditsMet);
                         const isAvailable = !isPassed && !isOngoing && prereqsMet && creditsMet;
                         const isSpotlighted = hoveredCourseId === course.course_id && isAvailable;
@@ -561,7 +766,7 @@ function Plan({ user }) {
         </div>
 
         {/* MAIN PAGE SCHEDULE PREVIEW */}
-        <div className="mt-5 pt-5">
+        <div className="mt-5 pt-3">
           <div className="p-4 rounded-4 shadow-sm border bg-white">
               <h3 className="fw-bold text-center mb-4" style={{ color: '#104929' }}>Your Weekly Plan</h3>
               {mainScheduleSections.length > 0 ? renderScheduleGrid(mainScheduleSections) : (
@@ -570,6 +775,103 @@ function Plan({ user }) {
                   </div>
               )}
           </div>
+        </div>
+
+        {/* ========================================== */}
+        {/* NEW AI MISSION CONTROL DASHBOARD           */}
+        {/* ========================================== */}
+        <div className="mt-4 pt-2 mb-5">
+            {isInvalidLoad ? (
+                // LOCKED GAMIFIED STATE
+                <div className="p-5 rounded-4 shadow-lg dashboard-locked text-center border">
+                    <i className="bi bi-lock-fill mb-3 d-block" style={{ fontSize: '3.5rem', opacity: 0.8 }}></i>
+                    <h2 className="fw-bold mb-3">AI Prediction Engine Standby</h2>
+                    <p className="lead m-0 opacity-75">
+                        You need to hit the minimum credit requirement <strong className="text-white">({minCredits} credits)</strong> for the AI to activate. <br/>
+                        Add more courses to your schedule to unlock your future!
+                    </p>
+                </div>
+            ) : (
+                // UNLOCKED DASHBOARD STATE
+                <div className="p-4 rounded-4 shadow-sm border bg-white position-relative">
+                    {isPredicting && (
+                        <div className="position-absolute top-0 start-0 w-100 h-100 bg-white opacity-75 d-flex justify-content-center align-items-center" style={{zIndex: 5, borderRadius: '15px'}}>
+                            <div className="spinner-border text-success" role="status"><span className="visually-hidden">Loading...</span></div>
+                        </div>
+                    )}
+                    
+                    <div className="d-flex justify-content-between align-items-center border-bottom pb-3 mb-4">
+                        <h4 className="fw-bold m-0" style={{ color: '#104929' }}><i className="bi bi-cpu-fill me-2"></i>E-Advisor AI Predictions</h4>
+                        <span className="badge bg-success text-white px-3 py-2 rounded-pill"><i className="bi bi-check-circle-fill me-2"></i>Engine Active</span>
+                    </div>
+
+                    <div className="row g-0 align-items-stretch">
+                        
+                        {/* LEFT: THE TUBES (Individual Course Predictions) */}
+                        <div className="col-md-4 pe-4 d-flex flex-column justify-content-center">
+                            <h6 className="fw-bold text-muted mb-3 text-uppercase small">Course Grade Breakdown</h6>
+                            <div className="d-flex flex-column gap-3">
+                                {selectedCourses.map(c => {
+                                    const predGrade = predictions[c.course_id] || 0;
+                                    const { courseAvg: avgGrade } = getHistoricalStats(c); 
+                                    
+                                    return (
+                                        <div key={c.course_id}>
+                                            <div className="d-flex justify-content-between small fw-bold mb-1">
+                                                <span style={{color: '#104929'}}>{c.course_prefix}-{c.course_number}</span>
+                                                <span className="text-muted">
+                                                    Pred: <span className={predGrade >= avgGrade ? "text-success" : "text-danger"}>{predGrade ? predGrade.toFixed(1) : '--'}</span> | Avg: {avgGrade}
+                                                </span>
+                                            </div>
+                                            {/* Tube 1: The AI Predicted Grade */}
+                                            <div className="progress shadow-sm" style={{ height: '14px', backgroundColor: '#e9ecef', borderRadius: '10px' }}>
+                                                <div className="progress-bar" style={{ width: `${predGrade}%`, backgroundColor: predGrade >= avgGrade ? '#104929' : '#d97706' }}></div>
+                                            </div>
+                                            {/* Tube 2: The Historical Average Grade */}
+                                            <div className="progress mt-1" style={{ height: '6px', backgroundColor: '#e9ecef', borderRadius: '10px' }}>
+                                                <div className="progress-bar bg-secondary opacity-50" style={{ width: `${avgGrade}%` }}></div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* CENTER: THE GPA HUB */}
+                        <div className="col-md-4 px-4 border-start border-end d-flex flex-column align-items-center justify-content-center">
+                            <h6 className="text-muted fw-bold mb-3 text-uppercase small">Predicted GPA After Semester</h6>
+                            <h1 className="display-2 fw-bold m-0" style={{ color: '#104929', textShadow: '2px 2px 4px rgba(0,0,0,0.1)' }}>
+                                {newCumulativeGPA.toFixed(2)}
+                            </h1>
+                            <div className={`mt-3 badge rounded-pill px-4 py-2 fs-6 shadow-sm ${gpaChange >= 0 ? 'bg-success' : 'bg-danger'}`}>
+                                {gpaChange >= 0 ? '▲' : '▼'} {Math.abs(gpaChange).toFixed(2)} {gpaChange >= 0 ? 'positive' : 'negative'}
+                            </div>
+                            <div className="mt-3 text-center small fw-bold bg-light px-3 py-2 rounded border w-100">
+                                <div className="text-muted">Current GPA: <span className="text-dark">{currentGPA.toFixed(2)}</span></div>
+                            </div>
+                        </div>
+
+                        {/* RIGHT: HARD METRICS */}
+                        <div className="col-md-4 ps-4 d-flex flex-column justify-content-center gap-4">
+                            <div>
+                                <div className="text-muted small fw-bold text-uppercase mb-1"><i className="bi bi-mortarboard-fill me-2"></i>Credits Done → Credits Done After Semester</div>
+                                <h4 className="fw-bold m-0 text-dark">
+                                    {totalCompletedCredits} <span className="text-muted fs-6">/ {totalProgramCredits}</span> <span className="text-success mx-1">→</span> {totalCompletedCredits + totalCredits} <span className="text-muted fs-6">/ {totalProgramCredits}</span>
+                                </h4>
+                            </div>
+                            <div>
+                                <div className="text-muted small fw-bold text-uppercase mb-1"><i className="bi bi-pie-chart-fill me-2"></i>Ahead or Behind Program Plan</div>
+                                <h3 className={`fw-bold m-0 ${progressStatus.color}`}>{progressStatus.label}</h3>
+                            </div>
+                            <div>
+                                <div className="text-muted small fw-bold text-uppercase mb-1"><i className="bi bi-calendar-event-fill me-2"></i>Minimum Semesters Left</div>
+                                <h3 className="fw-bold m-0" style={{ color: '#104929' }}>{minSemestersLeft}</h3>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            )}
         </div>
 
         {/* --- DYNAMIC FOOTER --- */}
@@ -780,7 +1082,6 @@ function Plan({ user }) {
                         if (!isAvailable) {
                             const isLockedAlert = !isPassed && !isOngoing;
                             
-                            // Dynamic warning generation for the specific rule broken
                             let lockReason = "";
                             if (isPassed) lockReason = "You have already completed this course.";
                             else if (isOngoing) lockReason = "You are currently enrolled in this course.";

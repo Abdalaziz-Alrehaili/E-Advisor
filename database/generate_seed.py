@@ -106,17 +106,25 @@ def get_prof_course_offset(prof_id, course_id):
     random.seed()
     return offset
 
-def get_realistic_grade(course_id, general_apt, prog_apt, prof_id, is_summer=False):
+# ADDED 'credit_load' param to penalize heavy semesters!
+def get_realistic_grade(course_id, general_apt, prog_apt, prof_id, is_summer=False, credit_load=15):
     c = COURSES.get(course_id, {'avg': 85, 'var': 'norm', 'skew': None, 'prog': False})
-    prof_data = PROFESSORS[prof_id - 1] # 0-indexed lookup
+    prof_data = PROFESSORS[prof_id - 1] 
     
-    modifier = general_apt
+    # 1. Aptitude Anchor: Strongly tie their grade to their general aptitude (GPA anchor)
+    modifier = general_apt * 2.5 
     if c['prog']: modifier += prog_apt
     modifier += prof_data['base_mod']
     modifier += get_prof_course_offset(prof_id, course_id)
     
     if is_summer: 
-        modifier += 3 # The Summer Focus Bump
+        modifier += 3 
+    
+    # 2. Credit Load Penalty: 18+ credits severely drops grades. 12 credits boosts them!
+    if credit_load > 16:
+        modifier -= (credit_load - 16) * 1.5 
+    elif credit_load < 13 and not is_summer:
+        modifier += (13 - credit_load) * 1.0 
     
     sigma = 12 if c['var'] == 'high' else (3 if c['var'] == 'low' else 6)
     sigma += (prof_data['var'] / 2) 
@@ -143,22 +151,39 @@ def is_credit_unlocked(cid, completed_set):
     return True
 
 # ------------------------------------------
-# SECTION GENERATOR
+# SECTION GENERATOR (UPDATED FOR NO BOTTLENECKS)
 # ------------------------------------------
 section_lookup = {} 
 section_sql_inserts = []
 sec_id_counter = 10000 
-days_options = ['Sun-Tue-Thu', 'Mon-Wed', 'Sun-Tue', 'Mon-Wed-Thu']
+
+TIMESLOTS = [
+    ("Sun-Tue-Thu", "08:00:00", "08:50:00"),
+    ("Mon-Wed", "08:00:00", "09:15:00"),
+    ("Sun-Tue-Thu", "09:00:00", "09:50:00"),
+    ("Mon-Wed", "09:30:00", "10:45:00"),
+    ("Sun-Tue-Thu", "10:00:00", "10:50:00"),
+    ("Sun-Tue-Thu", "11:00:00", "11:50:00"),
+    ("Sun-Tue-Thu", "13:00:00", "13:50:00"),
+    ("Sun-Tue-Thu", "14:00:00", "14:50:00"),
+    ("Mon-Wed", "13:00:00", "14:15:00")
+]
 
 for sem in range(1, 18): 
     for cid in PERFECT_PLAN:
-        prof_id = random.randint(1, len(PROFESSORS))
-        days = random.choice(days_options)
-        room = f"Room {random.randint(101, 599)}"
+        section_lookup[(cid, sem)] = []
         
-        section_lookup[(cid, sem)] = prof_id
-        section_sql_inserts.append(f"({sec_id_counter}, {cid}, {sem}, 'S1', {prof_id}, '{days}', '08:00:00', '09:20:00', '{room}', 30)")
-        sec_id_counter += 1
+        chosen_slots = random.sample(TIMESLOTS, 2)
+        
+        for sec_idx, slot in enumerate(chosen_slots):
+            prof_id = random.randint(1, len(PROFESSORS))
+            days, start_time, end_time = slot
+            room = f"Room {random.randint(101, 599)}"
+            sec_name = f"S{sec_idx + 1}"
+            
+            section_lookup[(cid, sem)].append((sec_id_counter, prof_id))
+            section_sql_inserts.append(f"({sec_id_counter}, {cid}, {sem}, '{sec_name}', {prof_id}, '{days}', '{start_time}', '{end_time}', '{room}', 30)")
+            sec_id_counter += 1
 
 # ------------------------------------------
 # THE FORWARD-SIMULATING ENGINE
@@ -175,12 +200,12 @@ def simulate_semesters(target_start_sem, pacing):
         
         if sem == 1:
             for c in Y1_SEM1_COURSES:
-                allocations.append({'cid': c, 'sem': sem, 'yr': 1, 'placeholder': 'NULL'})
+                allocations.append({'cid': c, 'sem': sem, 'yr': 1, 'placeholder': 'NULL', 'sem_load': 16})
                 completed.add(c)
             continue
         elif sem == 2:
             for c in Y1_SEM2_COURSES:
-                allocations.append({'cid': c, 'sem': sem, 'yr': 1, 'placeholder': 'NULL'})
+                allocations.append({'cid': c, 'sem': sem, 'yr': 1, 'placeholder': 'NULL', 'sem_load': 14})
                 completed.add(c)
             continue
         elif sem == 3: continue
@@ -256,7 +281,8 @@ def simulate_semesters(target_start_sem, pacing):
                 'cid': sc['cid'], 
                 'sem': sem, 
                 'yr': year_num,
-                'placeholder': sc['placeholder']
+                'placeholder': sc['placeholder'],
+                'sem_load': cur_creds # Passed to grader!
             })
             completed.add(sc['cid'])
             
@@ -546,17 +572,13 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
     pw = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8" 
     users = [f"('admin1', '{pw}', 'Matthew', 'Williams', 'admin')"]
     
-    # Generate the 15 Professors in `users`
     for i, prof in enumerate(PROFESSORS):
         parts = prof['name'].split(' ', 1)
         if i == 0:
-            # prof1 gets the supervisor portal!
             users.append(f"('prof1', '{pw}', '{parts[0]}', '{parts[1]}', 'supervisor')")
         elif i == 1:
-            # prof2 gets the supervisor portal!
             users.append(f"('prof2', '{pw}', '{parts[0]}', '{parts[1]}', 'supervisor')")
         else:
-            # The rest are ML data points
             users.append(f"('prof{i+1}', '{pw}', '{parts[0]}', '{parts[1]}', 'professor')")
             
     for i, (fn, ln) in enumerate(ACTIVE_NAMES, 1):
@@ -570,7 +592,6 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
     f.write("-- 10. Professors Table Mapping\n")
     f.write("INSERT INTO professors (user_id, dept_id, is_supervisor, office_number) VALUES \n")
     profs = []
-    # Admin is user 1. Profs are users 2 to 16
     for i, prof in enumerate(PROFESSORS):
         user_id = i + 2
         is_sup = "TRUE" if prof["is_sup"] else "FALSE"
@@ -582,7 +603,6 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
     f.write("INSERT INTO students (user_id, program_id, admission_year, supervisor_id, is_graduated) VALUES \n")
     students = []
     
-    # Active students mapped strictly to prof_id 1 (prof1) and prof_id 2 (prof2)
     students.append("(17, 1, 2024, 1, FALSE)")  # S1 -> prof1
     students.append("(18, 1, 2024, 2, FALSE)")  # S2 -> prof2
     students.append("(19, 1, 2023, 2, FALSE)")  # S3 -> prof2
@@ -590,9 +610,8 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
     students.append("(21, 1, 2022, 1, FALSE)")  # S5 -> prof1
     students.append("(22, 1, 2022, 2, FALSE)")  # S6 -> prof2
     
-    # History students start at user 23
     for i in range(23, 23 + NUM_HISTORICAL_STUDENTS):
-        sup_id = random.choice([1, 2]) # Assign randomly to the two active supervisors
+        sup_id = random.choice([1, 2]) 
         admit_year = random.randint(2018, 2021)
         students.append(f"({i}, 1, {admit_year}, {sup_id}, TRUE)")
     f.write(",\n".join(students) + ";\n\n")
@@ -622,9 +641,11 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
         allocs = simulate_semesters(p["start_sem"], p["pacing"])
         for a in allocs:
             grade = force_gpa_grade(p["gpa"])
-            prof_id = section_lookup.get((a['cid'], a['sem']))
-            # Find the actual section ID mapped to this prof/course
-            sec_id = next((int(x.split(',')[0].replace('(','')) for x in section_sql_inserts if f" {a['cid']}, {a['sem']}," in x and f" {prof_id}," in x), "NULL")
+            
+            available_sections = section_lookup.get((a['cid'], a['sem']), [(1, 1)])
+            chosen_sec = random.choice(available_sections)
+            sec_id = chosen_sec[0]
+            
             enrolls.append(f"({p['id']}, {sec_id}, {a['cid']}, {a['sem']}, {a['yr']}, 'completed', {grade}, {a['placeholder']})")
     f.write(",\n".join(enrolls) + ";\n\n")
 
@@ -638,10 +659,12 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
         
         allocs = simulate_semesters(start_sem, pacing)
         for a in allocs:
-            prof_id = section_lookup.get((a['cid'], a['sem']), 1)
-            # Send the boolean flag to the grader based on modulo 3
-            grade = get_realistic_grade(a['cid'], gen_apt, prog_apt, prof_id, (a['sem'] % 3 == 0))
-            sec_id = next((int(x.split(',')[0].replace('(','')) for x in section_sql_inserts if f" {a['cid']}, {a['sem']}," in x and f" {prof_id}," in x), "NULL")
+            available_sections = section_lookup.get((a['cid'], a['sem']), [(1, 1)])
+            chosen_sec = random.choice(available_sections)
+            sec_id = chosen_sec[0]
+            prof_id = chosen_sec[1]
+            
+            grade = get_realistic_grade(a['cid'], gen_apt, prog_apt, prof_id, (a['sem'] % 3 == 0), a['sem_load'])
             hist_enrolls.append(f"({student_id}, {sec_id}, {a['cid']}, {a['sem']}, {a['yr']}, 'completed', {grade}, {a['placeholder']})")
 
     for i in range(0, len(hist_enrolls), chunk_size):
