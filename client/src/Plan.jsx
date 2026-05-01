@@ -1111,28 +1111,56 @@ function Plan({ user }) {
                                         const isSelectedSection = previewSectionId === sec.section_id;
                                         const conflictingCourse = getConflictingCourse(sec);
                                         const isConflicting = !!conflictingCourse;
+                                        
+                                        // NEW: Check if the section has reached max capacity
+                                        const isFull = sec.enrolled_count >= sec.max_capacity;
+                                        
+                                        // If it's full or conflicting, disable it. 
+                                        // Exception: If the user already selected it, keep it active so they can unselect it!
+                                        const isDisabled = (isConflicting || isFull) && !isSelectedSection;
 
                                         return (
                                             <div key={sec.section_id} 
-                                                 onClick={!isConflicting ? () => setPreviewSectionId(previewSectionId === sec.section_id ? null : sec.section_id) : undefined}
-                                                 className={`p-3 border rounded shadow-sm transition-all ${isConflicting ? 'opacity-50' : ''}`}
+                                                 onClick={!isDisabled ? () => setPreviewSectionId(previewSectionId === sec.section_id ? null : sec.section_id) : undefined}
+                                                 className={`p-3 border rounded shadow-sm transition-all ${isDisabled ? 'opacity-50' : ''}`}
                                                  style={{ 
-                                                     cursor: isConflicting ? 'not-allowed' : 'pointer', 
-                                                     backgroundColor: isConflicting ? '#f8d7da' : (isSelectedSection ? '#eefaf4' : '#fff'), 
+                                                     cursor: isDisabled ? 'not-allowed' : 'pointer', 
+                                                     // Gray out the background if it's full and they haven't selected it
+                                                     backgroundColor: isFull && !isSelectedSection ? '#e9ecef' : (isConflicting ? '#f8d7da' : (isSelectedSection ? '#eefaf4' : '#fff')), 
                                                      border: isSelectedSection ? '2px solid #104929' : (isConflicting ? '1px solid #dc3545' : '1px solid #dee2e6') 
                                                  }}>
                                                 <div className="d-flex justify-content-between align-items-center mb-2">
-                                                    <span className="fw-bold fs-5">{sec.section_name}</span>
-                                                    <span className={`badge ${isConflicting ? 'bg-danger' : 'bg-primary'}`}>{sec.days}</span>
+                                                    <span className="fw-bold fs-5" style={{ color: isFull && !isSelectedSection ? '#6c757d' : 'inherit' }}>
+                                                        {sec.section_name}
+                                                    </span>
+                                                    
+                                                    <div className="d-flex gap-2 align-items-center">
+                                                        {/* NEW: Max Capacity Badge */}
+                                                        {isFull && !isSelectedSection && (
+                                                            <span className="badge bg-secondary">Max Capacity</span>
+                                                        )}
+                                                        <span className={`badge ${isConflicting ? 'bg-danger' : isFull && !isSelectedSection ? 'bg-secondary' : 'bg-primary'}`}>
+                                                            {sec.days}
+                                                        </span>
+                                                    </div>
                                                 </div>
+                                                
                                                 {isConflicting && (
                                                     <div className="small fw-bold text-danger mb-2">
                                                         ⚠ Time Conflict: {conflictingCourse.course_prefix}-{conflictingCourse.course_number}
                                                     </div>
                                                 )}
+                                                
                                                 <div className="small text-muted mb-1"><i className="bi bi-person-fill me-2"></i>{sec.professor_name}</div>
                                                 <div className="small text-muted mb-1"><i className="bi bi-clock-fill me-2"></i>{sec.start_time.substring(0,5)} - {sec.end_time.substring(0,5)}</div>
-                                                <div className="small text-muted"><i className="bi bi-geo-alt-fill me-2"></i>{sec.room_number}</div>
+                                                
+                                                <div className="small text-muted d-flex justify-content-between mt-2 pt-2 border-top">
+                                                    <span><i className="bi bi-geo-alt-fill me-2"></i>{sec.room_number}</span>
+                                                    {/* NEW: Seats Tracker */}
+                                                    <span className="fw-bold" style={{ color: isFull && !isSelectedSection ? '#dc3545' : '#104929' }}>
+                                                        {sec.enrolled_count || 0} / {sec.max_capacity} Seats
+                                                    </span>
+                                                </div>
                                             </div>
                                         );
                                     })}

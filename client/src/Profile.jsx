@@ -6,10 +6,8 @@ function Profile({ user }) {
   const [draftPlan, setDraftPlan] = useState(null);
   const [major, setMajor] = useState('');
   
-  // NEW: State for Supervisor and Chat Notifications
   const [supervisorInfo, setSupervisorInfo] = useState(null);
   
-  // Modal State for section details
   const [showModal, setShowModal] = useState(false);
   const [selectedSemDetails, setSelectedSemDetails] = useState([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -41,7 +39,6 @@ function Profile({ user }) {
 
   useEffect(() => {
     if (user && user.user_id) {
-      // Fetch Grades
       fetch(`http://localhost:5000/my-grades/${user.user_id}`)
         .then(res => res.json())
         .then(data => {
@@ -50,7 +47,6 @@ function Profile({ user }) {
         })
         .catch(err => { console.error("Grades error:", err); setGrades([]); });
 
-      // Fetch Major dynamically from the database
       fetch(`http://localhost:5000/my-major/${user.user_id}`)
         .then(res => res.json())
         .then(data => {
@@ -58,13 +54,11 @@ function Profile({ user }) {
         })
         .catch(err => console.error("Major fetch error:", err));
 
-      // NEW: Fetch Supervisor Info & Unread Message Count
       fetch(`http://localhost:5000/api/student/${user.user_id}/supervisor-info`)
         .then(res => res.json())
         .then(data => setSupervisorInfo(data))
         .catch(err => console.error("Supervisor fetch error:", err));
 
-      // Fetch Draft
       fetchDraft();
     }
   }, [user]);
@@ -112,7 +106,6 @@ function Profile({ user }) {
 
   const safeGrades = Array.isArray(grades) ? grades : [];
   const totalCreditsDone = safeGrades.filter(c => c.status === 'completed').reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
-  const isCurrentlyUndergoing = safeGrades.some(c => c.status === 'undergoing');
 
   const yearData = safeGrades.reduce((acc, current) => {
     const year = current.year_number;
@@ -132,14 +125,6 @@ function Profile({ user }) {
     return acc;
   }, {});
 
-  const regSemName = draftPlan?.semester_name || "Upcoming Semester";
-  let regSemKey = '1'; 
-  if (draftPlan) {
-      const lowerName = regSemName.toLowerCase();
-      if (lowerName.includes('second')) regSemKey = '2';
-      else if (lowerName.includes('summer')) regSemKey = 'Summer';
-  }
-
   let maxYear = 0;
   let maxSemRule = 0; 
   
@@ -153,24 +138,28 @@ function Profile({ user }) {
       }
   });
 
+  const regSemName = draftPlan?.semester_name || "Upcoming Semester";
+  let regSemKey = '1'; 
   let regSemRule = 1;
-  if (regSemKey === '2') regSemRule = 2;
-  if (regSemKey === 'Summer') regSemRule = 3;
 
-  let isLogicalNextSemester = true;
-  if (maxYear > 0) {
-      if (maxSemRule === 3) {
-          isLogicalNextSemester = (regSemRule === 1);
-      } else if (maxSemRule === 2) {
-          isLogicalNextSemester = (regSemRule === 3 || regSemRule === 1);
-      } else if (maxSemRule === 1) {
-          isLogicalNextSemester = (regSemRule === 2);
+  if (draftPlan) {
+      const lowerName = regSemName.toLowerCase();
+      if (lowerName.includes('second')) { regSemKey = '2'; regSemRule = 2; }
+      else if (lowerName.includes('summer')) { regSemKey = 'Summer'; regSemRule = 3; }
+  }
+
+  let calculatedRegYear = draftPlan?.year_number || 1;
+  if (draftPlan && maxYear > 0) {
+      if (regSemRule <= maxSemRule) {
+          calculatedRegYear = maxYear + 1;
+      } else {
+          calculatedRegYear = maxYear;
       }
   }
 
-  const isRegOpen = draftPlan !== null && !isCurrentlyUndergoing && isLogicalNextSemester;
+  const isRegOpen = draftPlan !== null;
+  const regYear = isRegOpen ? calculatedRegYear : null;
   
-  const regYear = isRegOpen ? (draftPlan.year_number || 1) : null;
   const allYearKeys = Array.from(new Set([
     ...Object.keys(yearData), 
     regYear ? regYear.toString() : null
@@ -188,9 +177,33 @@ function Profile({ user }) {
         }
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
         .details-modal { background: white; padding: 40px; border-radius: 15px; width: 850px; max-height: 85vh; overflow-y: auto; border-top: 10px solid #0d6efd; position: relative; }
+        
+        .hero-alert {
+            background: linear-gradient(135deg, #fffcf5 0%, #fff8ec 100%);
+            border: 2px solid #fce3b8;
+            border-left: 8px solid #d97706;
+        }
       `}</style>
 
       <div className="centered-content-container">
+
+        {/* --- NEW: LOGIN NOTIFICATION BANNER --- */}
+        {isRegOpen && (
+          <div className="alert hero-alert shadow-sm d-flex flex-column flex-md-row justify-content-between align-items-center mb-5" style={{ borderRadius: '12px', padding: '20px 30px' }}>
+            <div className="d-flex align-items-center gap-4 mb-3 mb-md-0">
+              <i className="bi bi-megaphone-fill" style={{ fontSize: '2.5rem', color: '#d97706' }}></i>
+              <div>
+                <h4 className="fw-bold m-0 text-dark mb-1">Registration is Open!</h4>
+                <p className="m-0 text-muted" style={{ fontSize: '1.05rem' }}>
+                  The planning period for <strong style={{ color: '#d97706' }}>{regSemName}</strong> is currently active. Build your schedule before seats fill up.
+                </p>
+              </div>
+            </div>
+            <Link to="/plan" className="btn btn-lg fw-bold px-4 shadow-sm text-nowrap" style={{ backgroundColor: '#d97706', color: 'white', borderRadius: '30px' }}>
+              Build Plan Now <i className="bi bi-arrow-right-circle-fill ms-2"></i>
+            </Link>
+          </div>
+        )}
         
         <div className="profile-info-header" style={{ width: '75vw', margin: '0 auto', borderBottom: '2px solid rgba(16, 73, 41, 0.15)', paddingBottom: '45px', marginBottom: '50px' }}>
           
@@ -319,6 +332,17 @@ function Profile({ user }) {
                   backgroundColor: cellBgColor,
                   transition: 'background-color 0.3s ease'
                 };
+
+                if (!semData && !isRegistrationSlot) {
+                  return (
+                    <div key={`${yearNum}-${slot}`} style={cellStyle}>
+                       <div className="h-100 w-100 d-flex flex-column align-items-center justify-content-center rounded" style={{ minHeight: '150px', border: '2px dashed #dee2e6', backgroundColor: '#f8f9fa', opacity: 0.7 }}>
+                          <i className="bi bi-calendar-x mb-2" style={{ fontSize: '1.5rem', color: '#adb5bd' }}></i>
+                          <span className="text-muted fw-bold small">No Courses Assigned</span>
+                       </div>
+                    </div>
+                  );
+                }
 
                 if (semData) {
                   const totalSemCredits = semData.courses.reduce((sum, c) => sum + (Number(c.credits) || 0), 0);
@@ -516,11 +540,7 @@ function Profile({ user }) {
                   );
                 }
 
-                return (
-                  <div key={`${yearNum}-${slot}`} style={cellStyle}>
-                     <div className="h-100 w-100 opacity-25" style={{ minHeight: '150px' }}></div>
-                  </div>
-                );
+                return null;
               });
             })}
           </div>
