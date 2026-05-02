@@ -170,12 +170,15 @@ app.get('/courses', (req, res) => {
     });
 });
 
-// --- UPDATED STUDENT SECTIONS ROUTE ---
+// --- ML COMPATIBILITY FIX: JOIN PROFESSORS SO PLAN.JS DISPLAYS NAMES ---
 app.get('/sections', (req, res) => {
     const sql = `
         SELECT s.*, 
+               CONCAT(u.first_name, ' ', u.last_name) AS professor_name,
                (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.section_id AND e.status = 'undergoing') as official_count
         FROM sections s
+        LEFT JOIN professors p ON s.professor_id = p.professor_id
+        LEFT JOIN users u ON p.user_id = u.user_id
     `;
     db.query(sql, (err, sections) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -311,9 +314,16 @@ app.get('/my-draft/:user_id', (req, res) => {
                     if (!coursesArr || coursesArr.length === 0) return res.json({ ...draft, courses: [] });
 
                     const ids = coursesArr.map(c => c.course_id || c);
-                    db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [ids], (err, courses) => {
+                    db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [ids], (err, dbCourses) => {
                         if (err) return res.status(500).json({ error: err.message });
-                        res.json({ ...draft, courses });
+                        
+                        // FIX: Merge the database course data with the saved JSON so we don't lose the selected_section_id!
+                        const mergedCourses = coursesArr.map(savedCourse => {
+                            const dbInfo = dbCourses.find(c => c.course_id === (savedCourse.course_id || savedCourse));
+                            return { ...dbInfo, ...savedCourse };
+                        });
+
+                        res.json({ ...draft, courses: mergedCourses });
                     });
                 } else if (openSemester) {
                     const isFirstSem = openSemester.semester_name.toLowerCase().includes('first') || openSemester.semester_name.includes('1');
@@ -334,7 +344,6 @@ app.get('/my-draft/:user_id', (req, res) => {
     });
 });
 
-// --- UPDATED SAVE-PLAN ROUTE (GATEKEEPER) ---
 app.post('/save-plan', (req, res) => {
     const { user_id, selectedCourses } = req.body;
     if (!selectedCourses || selectedCourses.length === 0) return res.status(400).json({ error: "No courses selected" });
@@ -459,7 +468,7 @@ app.get('/admin/semester-board', (req, res) => {
         res.json(buttons);
     });
 });
-// --- UPDATED: Close Semester & Auto-Generate Sections for the Next One ---
+
 app.post('/admin/semester-action', (req, res) => {
     const { semester_id, action, semester_name, close_date } = req.body;
     
@@ -492,20 +501,19 @@ app.post('/admin/semester-action', (req, res) => {
                         db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
                             const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
                             
-                            // 1. Create the new empty semester
                             db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err, newSemResult) => {
                                 if (err) return res.status(500).json({error: err.message});
                                 
                                 const new_semester_id = newSemResult.insertId;
 
-                                // 2. AUTO-GENERATE SECTIONS: Automatically populate the new semester with S1 and S2 for every course!
+                                // --- ML COMPATIBILITY FIX: USE PROFESSOR_ID IN AUTO-GENERATE ---
                                 const autoGenerateSQL1 = `
-                                    INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
-                                    SELECT course_id, ?, 'S1', 'Dr. Ahmad Mansour', 'Sun-Tue-Thu', '08:00:00', '09:20:00', 'Bldg 1-R106', 30 FROM courses
+                                    INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
+                                    SELECT course_id, ?, 'S1', 1, 'Sun-Tue-Thu', '08:00:00', '09:20:00', 'Bldg 1-R106', 30 FROM courses
                                 `;
                                 const autoGenerateSQL2 = `
-                                    INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
-                                    SELECT course_id, ?, 'S2', 'Prof. Mustafa Osman', 'Mon-Wed', '10:00:00', '11:20:00', 'Bldg 2-R110', 30 FROM courses
+                                    INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
+                                    SELECT course_id, ?, 'S2', 2, 'Mon-Wed', '10:00:00', '11:20:00', 'Bldg 2-R110', 30 FROM courses
                                 `;
 
                                 db.query(autoGenerateSQL1, [new_semester_id], () => {
@@ -531,7 +539,6 @@ app.post('/admin/semester-action', (req, res) => {
     }
 });
 
-// --- NEW: Remove a section entirely ---
 app.delete('/admin/sections/:id', (req, res) => {
     db.query('DELETE FROM sections WHERE section_id = ?', [req.params.id], (err) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -546,7 +553,7 @@ app.get('/admin/plans', (req, res) => {
     });
 });
 
-// --- NEW: Add a New Section (Class) ---
+// --- ML COMPATIBILITY FIX: MAP FRONTEND NAMES TO PROFESSOR_ID ---
 app.post('/admin/sections', (req, res) => {
     const { course_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity } = req.body;
 
@@ -554,7 +561,6 @@ app.post('/admin/sections', (req, res) => {
         return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Find the currently active/upcoming semester
     const sqlSem = `SELECT semester_id FROM semesters WHERE is_completed = FALSE ORDER BY semester_id ASC LIMIT 1`;
     
     db.query(sqlSem, (err, semResult) => {
@@ -563,20 +569,26 @@ app.post('/admin/sections', (req, res) => {
 
         const semester_id = semResult[0].semester_id;
 
-        // Insert the new class section
+        // Map the string name from the frontend to an integer ID for the database
+        const profMap = {
+            'Dr. Ahmad Mansour': 1, 'Dr. Khaled Al-Sayed': 2, 'Prof. Mustafa Osman': 3,
+            'Dr. Ibrahim Hassan': 4, 'Dr. Omar Bakri': 5, 'Dr. Sami Al-Qahtani': 6,
+            'Dr. Yahya Jameel': 7, 'Prof. Nasser Idris': 8, 'Dr. Suleiman Taha': 9, 'Dr. Waleed Saeed': 10
+        };
+        const professor_id = profMap[professor_name] || 1; // Default to ID 1 if not found
+
         const sql = `
-            INSERT INTO sections (course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity)
+            INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         
-        db.query(sql, [course_id, semester_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity], (err, result) => {
+        db.query(sql, [course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity], (err, result) => {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ success: true, section_id: result.insertId });
         });
     });
 });
 
-// --- NEW ADMIN ROUTES (Capacity Management) ---
 app.get('/admin/sections', (req, res) => {
     const sqlSem = `SELECT semester_id, semester_name FROM semesters WHERE is_completed = FALSE ORDER BY semester_id ASC LIMIT 1`;
     
@@ -690,9 +702,6 @@ app.get('/api/recommendations/:user_id', (req, res) => {
     });
 });
 
-// ==========================================
-// UPGRADED MACHINE LEARNING EXTRACTION API
-// ==========================================
 app.get('/api/ml/extract-training-data', (req, res) => {
     const sql = `
         SELECT 
@@ -701,16 +710,13 @@ app.get('/api/ml/extract-training-data', (req, res) => {
             c.credits AS course_credits,
             e.grade AS actual_grade,
             
-            -- Feature: Is it a summer semester? (1 = Yes, 0 = No)
             CASE WHEN sr.semester_type = 'Summer' THEN 1 ELSE 0 END AS is_summer,
             
-            -- Feature: Course Historical Average
             IFNULL((
                 SELECT ROUND(AVG(grade), 2) FROM enrollments 
                 WHERE course_id = e.course_id AND status = 'completed' AND grade IS NOT NULL
             ), 85.00) AS course_historical_average,
             
-            -- Feature: Professor Historical Average (How easy is this specific professor overall?)
             IFNULL((
                 SELECT ROUND(AVG(e_prof.grade), 2) 
                 FROM enrollments e_prof 
@@ -719,7 +725,6 @@ app.get('/api/ml/extract-training-data', (req, res) => {
                   AND e_prof.status = 'completed' AND e_prof.grade IS NOT NULL
             ), 85.00) AS prof_historical_average,
             
-            -- Feature: Professor Course-Specific Average (Is this professor brutal in THIS specific course?)
             IFNULL((
                 SELECT ROUND(AVG(e_spec.grade), 2) 
                 FROM enrollments e_spec 
@@ -729,7 +734,6 @@ app.get('/api/ml/extract-training-data', (req, res) => {
                   AND e_spec.status = 'completed' AND e_spec.grade IS NOT NULL
             ), 85.00) AS prof_course_specific_average,
             
-            -- Feature: Credits Completed BEFORE this course
             IFNULL((
                 SELECT SUM(c2.credits) FROM enrollments e2 
                 JOIN courses c2 ON e2.course_id = c2.course_id 
@@ -737,7 +741,6 @@ app.get('/api/ml/extract-training-data', (req, res) => {
                   AND e2.status = 'completed' AND e2.semester_id < e.semester_id
             ), 0) AS credits_completed_before,
             
-            -- Feature: Cumulative GPA BEFORE this course
             IFNULL((
                 SELECT ROUND(AVG(
                     CASE 
@@ -753,14 +756,12 @@ app.get('/api/ml/extract-training-data', (req, res) => {
                   AND e3.semester_id < e.semester_id AND e3.grade IS NOT NULL
             ), 0.00) AS cumulative_gpa_before,
             
-            -- Feature: Attempted Semester Credits
             IFNULL((
                 SELECT SUM(c4.credits) FROM enrollments e4 
                 JOIN courses c4 ON e4.course_id = c4.course_id 
                 WHERE e4.student_id = e.student_id AND e4.semester_id = e.semester_id
             ), c.credits) AS attempted_semester_credits,
             
-            -- Feature: Current Schedule Difficulty (Average historical grade of all courses taken this semester)
             IFNULL((
                 SELECT ROUND(AVG(hist_grades.c_avg), 2)
                 FROM enrollments e_sched
@@ -790,42 +791,66 @@ app.get('/api/ml/extract-training-data', (req, res) => {
     });
 });
 
-// ==========================================
-// AI PREDICTION ENDPOINT
-// ==========================================
 app.post('/api/predict', (req, res) => {
     const studentData = req.body;
 
-    // Spawn the Python process (We use 'python3' for Docker Linux environments)
     const pythonProcess = spawn('python3', ['predict.py', JSON.stringify(studentData)]);
 
     let result = '';
     let errorOutput = '';
 
-    // Listen for the AI's answer
     pythonProcess.stdout.on('data', (data) => {
         result += data.toString();
     });
 
-    // Listen for Python crashes
     pythonProcess.stderr.on('data', (data) => {
         errorOutput += data.toString();
     });
 
-    // When the Python script finishes:
     pythonProcess.on('close', (code) => {
         if (code !== 0) {
             console.error(`Python ML Error: ${errorOutput}`);
             return res.status(500).json({ error: 'Prediction engine failed', details: errorOutput });
         }
         try {
-            // Send the final grade back to the frontend!
             const prediction = JSON.parse(result);
             res.json(prediction);
         } catch (e) {
             console.error("Failed to parse Python output:", result);
             res.status(500).json({ error: 'Invalid response from AI model' });
         }
+    });
+});
+
+// ==========================================
+// SIMULATE END OF SEMESTER (MASS GRADING)
+// ==========================================
+app.post('/admin/finalize-grades', (req, res) => {
+    db.query("SELECT enrollment_id FROM enrollments WHERE status = 'undergoing'", (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (results.length === 0) {
+            return res.json({ success: true, message: "No undergoing courses found to grade." });
+        }
+
+        let completed = 0;
+        let hasError = false;
+
+        results.forEach(row => {
+            // ML-COMPATIBLE FIX: Generate a random numerical grade between 60 and 100
+            const randomGrade = Math.floor(Math.random() * (100 - 60 + 1)) + 60;
+            
+            db.query("UPDATE enrollments SET status = 'completed', grade = ? WHERE enrollment_id = ?", [randomGrade, row.enrollment_id], (err) => {
+                if (err && !hasError) {
+                    hasError = true;
+                    return res.status(500).json({ error: err.message });
+                }
+                completed++;
+                if (completed === results.length && !hasError) {
+                    res.json({ success: true });
+                }
+            });
+        });
     });
 });
 

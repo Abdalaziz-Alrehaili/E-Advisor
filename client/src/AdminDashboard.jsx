@@ -241,11 +241,11 @@ function AdminDashboard() {
               >
                 <h2 className="fw-bold mb-4" style={{ letterSpacing: '0.5px' }}>{btn.semester_name}</h2>
                 
-                <div className="badge px-5 py-3 fs-5 rounded-pill shadow-sm" style={{ backgroundColor: 'rgba(255,255,255,0.9)', color: '#000000' }}>
-                  {btn.state === 'green' && '🟢 CLICK TO OPEN'}
-                  {btn.state === 'red' && '🔴 CLICK TO CLOSE'}
-                  {btn.state === 'grey' && '🔒 LOCKED (WAITING TURN)'}
-                </div>
+<div className="badge px-5 py-3 fs-5 rounded-pill shadow-sm" style={{ backgroundColor: 'rgba(255,255,255,0.9)', color: '#000000' }}>
+  {btn.state === 'green' && <><i className="bi bi-unlock-fill text-success me-2"></i> CLICK TO OPEN</>}
+  {btn.state === 'red' && <><i className="bi bi-lock-fill text-danger me-2"></i> CLICK TO CLOSE</>}
+  {btn.state === 'grey' && <><i className="bi bi-clock-history text-secondary me-2"></i> LOCKED (WAITING TURN)</>}
+</div>
               </div>
             </div>
           ))}
