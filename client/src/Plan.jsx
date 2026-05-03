@@ -29,27 +29,6 @@ function Plan({ user }) {
   const [showElective, setShowElective] = useState(false);
   const [showFree, setShowFree] = useState(false);
 
-  // ==========================================
-  // UNIVERSAL GPA CALCULATOR
-  // ==========================================
-  const gradeToGPA = (grade) => {
-      if (!grade) return 0;
-      
-      // Safety catch: If there are old letter grades in the DB
-      if (typeof grade === 'string' && isNaN(grade)) {
-          const gradePoints = { 'A+': 5.0, 'A': 4.75, 'B+': 4.5, 'B': 4.0, 'C+': 3.5, 'C': 3.0, 'D+': 2.5, 'D': 2.0, 'F': 0 };
-          return gradePoints[grade.toUpperCase()] || 0;
-      }
-
-      // New ML-compatible numerical grades
-      const numGrade = Number(grade);
-      if(numGrade >= 95) return 5.0; if(numGrade >= 90) return 4.75;
-      if(numGrade >= 85) return 4.5; if(numGrade >= 80) return 4.0;
-      if(numGrade >= 75) return 3.5; if(numGrade >= 70) return 3.0;
-      if(numGrade >= 65) return 2.5; if(numGrade >= 60) return 2.0;
-      return 1.0;
-  };
-
   useEffect(() => {
     if (user && user.user_id) {
       fetch(`http://localhost:5000/curriculum-status/${user.user_id}`)
@@ -125,7 +104,11 @@ function Plan({ user }) {
       let totalPoints = 0;
       let totalCr = 0;
       curriculum.filter(c => c.status === 'completed' && c.grade).forEach(c => {
-          let p = gradeToGPA(c.grade);
+          let p = 1.0;
+          if(c.grade >= 95) p = 5.0; else if(c.grade >= 90) p = 4.75; 
+          else if(c.grade >= 85) p = 4.5; else if(c.grade >= 80) p = 4.0; 
+          else if(c.grade >= 75) p = 3.5; else if(c.grade >= 70) p = 3.0; 
+          else if(c.grade >= 65) p = 2.5; else if(c.grade >= 60) p = 2.0;
           totalPoints += (p * (Number(c.credits) || 3));
           totalCr += (Number(c.credits) || 3);
       });
@@ -143,7 +126,7 @@ function Plan({ user }) {
   const maxCredits = isSummer ? 9 : 20;
   const isInvalidLoad = totalCredits < minCredits || totalCredits > maxCredits;
 
-  // --- AI Prediction Trigger ---
+  // --- NEW: AI Prediction Trigger (Simultaneous Individual Fetches) ---
   useEffect(() => {
       if (isInvalidLoad || selectedCourses.length === 0) {
           setPredictions({});
@@ -347,7 +330,6 @@ function Plan({ user }) {
     acc[termLabel].push(course);
     return acc;
   }, {});
-  
   const getProgress = () => {
       let elecComp = 0, freeComp = 0;
       let elecPlan = 0, freePlan = 0;
@@ -506,6 +488,15 @@ function Plan({ user }) {
     .map(c => ({ ...c, ...sections.find(s => s.section_id === parseInt(c.selected_section_id)) }))
     .filter(s => s.start_time && s.end_time);
 
+  const gradeToGPA = (grade) => {
+      if (!grade) return 0;
+      if(grade >= 95) return 5.0; if(grade >= 90) return 4.75;
+      if(grade >= 85) return 4.5; if(grade >= 80) return 4.0;
+      if(grade >= 75) return 3.5; if(grade >= 70) return 3.0;
+      if(grade >= 65) return 2.5; if(grade >= 60) return 2.0;
+      return 1.0;
+  };
+
   let predictedSemPoints = 0;
   selectedCourses.forEach(c => {
       const grade = predictions[c.course_id] || 85; 
@@ -520,6 +511,7 @@ function Plan({ user }) {
   // --- PROGRAM COMPLETION LOGIC ---
   const totalProgramCredits = 140; 
   
+  // 1. Ahead or Behind Logic (NOW DYNAMICALLY CALCULATED EVERY RENDER!)
   const getAcademicStatus = () => {
       const admissionYear = 2023; 
       const currentYear = 2026; 
@@ -530,6 +522,7 @@ function Plan({ user }) {
       let expectedCredits = Math.round(yearsEnrolled * creditsPerYear);
       if (expectedCredits > totalProgramCredits) expectedCredits = totalProgramCredits;
 
+      // THE FIX: We now include totalCredits (the courses you just clicked) in the calculation!
       const currentAndPlannedCredits = totalCompletedCredits + totalCredits;
       const difference = currentAndPlannedCredits - expectedCredits;
       
@@ -544,9 +537,11 @@ function Plan({ user }) {
   };
   const progressStatus = getAcademicStatus();
 
+  // 2. Critical Path DAG Algorithm (Minimum Semesters Left)
   const calculateMinSemesters = () => {
       const remainingCredits = Math.max(0, totalProgramCredits - (totalCompletedCredits + totalCredits));
       
+      // A. Capacity constraint
       let creds = remainingCredits;
       let credSems = 0;
       while (creds > 0) {
@@ -555,6 +550,7 @@ function Plan({ user }) {
           else creds -= 20; 
       }
 
+      // B. Prerequisite Bottleneck constraint (DAG Depth)
       const remainingCourses = curriculum.filter(c => 
           c.status !== 'completed' && 
           c.status !== 'undergoing' && 
@@ -586,61 +582,6 @@ function Plan({ user }) {
       return Math.max(credSems, maxDagDepth);
   };
   const minSemestersLeft = calculateMinSemesters();
-
-  // ==========================================
-  // CHART DATA GENERATOR
-  // ==========================================
-  const gpaHistoryData = (() => {
-      const history = [];
-      let cumulativePoints = 0;
-      let cumulativeCredits = 0;
-
-      // Grouped keys naturally sort chronologically via string sort (Year 1 - First Sem, Year 1 - Second Sem, Year 1 - Summer)
-      Object.keys(groupedCurriculum).sort().forEach(termLabel => {
-          const courses = groupedCurriculum[termLabel].filter(c => c.status === 'completed' && c.grade);
-          
-          if (courses.length > 0) {
-              let termPoints = 0;
-              let termCredits = 0;
-              courses.forEach(c => {
-                  const gpaVal = gradeToGPA(c.grade);
-                  const cr = Number(c.credits) || 3;
-                  termPoints += gpaVal * cr;
-                  termCredits += cr;
-              });
-              
-              const termGpa = termCredits > 0 ? (termPoints / termCredits) : 0;
-              cumulativePoints += termPoints;
-              cumulativeCredits += termCredits;
-              const cumGpa = cumulativeCredits > 0 ? (cumulativePoints / cumulativeCredits) : 0;
-
-              let shortLabel = termLabel
-                  .replace('Year ', 'Y')
-                  .replace(' - First Sem', ' S1')
-                  .replace(' - Second Sem', ' S2')
-                  .replace(' - Summer', ' Su');
-
-              history.push({
-                  label: shortLabel,
-                  termGpa: termGpa,
-                  cumGpa: cumGpa,
-                  isPrediction: false
-              });
-          }
-      });
-
-      // Add Predicted Semester Data
-      if (selectedCourses.length > 0 && totalCredits >= minCredits) {
-          history.push({
-              label: 'Predicted',
-              termGpa: predictedSemesterGPA,
-              cumGpa: newCumulativeGPA,
-              isPrediction: true
-          });
-      }
-
-      return history;
-  })();
 
   return (
     <div className="container-fluid plan-page-container bg-light min-vh-100 py-5">
@@ -932,72 +873,6 @@ function Plan({ user }) {
                 </div>
             )}
         </div>
-
-        {/* ========================================== */}
-        {/* NATIVE REACT BAR CHART                     */}
-        {/* ========================================== */}
-        {gpaHistoryData.length > 0 && (
-          <div className="p-4 rounded-4 shadow-sm border bg-white mb-5">
-              <div className="d-flex justify-content-between align-items-center mb-4">
-                  <h5 className="fw-bold m-0" style={{ color: '#104929' }}>
-                      <i className="bi bi-bar-chart-fill me-2"></i>Semester GPA Progression
-                  </h5>
-              </div>
-              
-              {/* Main Chart Area */}
-              <div className="d-flex justify-content-around" style={{ height: '250px', borderBottom: '2px solid #adb5bd', position: 'relative', marginTop: '20px', marginBottom: '30px' }}>
-                  
-                  {/* Y-axis markings (Background Grid) */}
-                  <div className="position-absolute w-100 h-100" style={{ zIndex: 0, opacity: 0.15, pointerEvents: 'none', bottom: 0 }}>
-                      <div style={{ position: 'absolute', bottom: '100%', width: '100%', borderBottom: '1px dashed #000' }}></div>
-                      <div style={{ position: 'absolute', bottom: '80%', width: '100%', borderBottom: '1px dashed #000' }}></div>
-                      <div style={{ position: 'absolute', bottom: '60%', width: '100%', borderBottom: '1px dashed #000' }}></div>
-                      <div style={{ position: 'absolute', bottom: '40%', width: '100%', borderBottom: '1px dashed #000' }}></div>
-                      <div style={{ position: 'absolute', bottom: '20%', width: '100%', borderBottom: '1px dashed #000' }}></div>
-                  </div>
-
-                  {/* Render Columns */}
-                  {gpaHistoryData.map((data, index) => {
-                      const heightPct = (data.termGpa / 5.0) * 100;
-                      const barColor = data.isPrediction ? '#d97706' : '#104929';
-                      
-                      return (
-                          <div key={index} className="d-flex flex-column justify-content-end align-items-center position-relative" style={{ zIndex: 1, height: '100%', width: '60px' }}>
-                              
-                              {/* Value Label (Floats right above the bar) */}
-                              <div className="fw-bold mb-1 small" style={{ color: barColor }}>
-                                  {data.termGpa.toFixed(2)}
-                              </div>
-                              
-                              {/* The Native HTML Bar */}
-                              <div 
-                                  className="rounded-top shadow-sm transition-all" 
-                                  style={{ 
-                                      height: `${Math.max(2, heightPct)}%`, 
-                                      width: '40px', 
-                                      backgroundColor: barColor,
-                                      opacity: data.isPrediction ? 0.8 : 1,
-                                      backgroundImage: data.isPrediction ? 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.15) 10px, rgba(255,255,255,0.15) 20px)' : 'none',
-                                  }}
-                                  title={`Cumulative GPA: ${data.cumGpa.toFixed(2)}`}
-                              ></div>
-                              
-                              {/* X-axis Label (Anchored absolutely BELOW the baseline) */}
-                              <div className="position-absolute text-muted fw-bold" style={{ top: '100%', paddingTop: '8px', fontSize: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                  {data.label}
-                              </div>
-                          </div>
-                      );
-                  })}
-              </div>
-              
-              {/* Legend */}
-              <div className="d-flex justify-content-center gap-4 mt-4 pt-2 small fw-bold">
-                  <div className="d-flex align-items-center"><span className="d-inline-block rounded me-2" style={{width: '14px', height: '14px', backgroundColor: '#104929'}}></span>Historical Semesters</div>
-                  <div className="d-flex align-items-center"><span className="d-inline-block rounded me-2" style={{width: '14px', height: '14px', backgroundColor: '#d97706'}}></span>Predicted Semester</div>
-              </div>
-          </div>
-        )}
 
         {/* --- DYNAMIC FOOTER --- */}
         <div className="mt-5 p-4 rounded-4 bg-white shadow-lg border d-flex justify-content-between align-items-center sticky-bottom" style={{ bottom: '20px', zIndex: 50 }}>

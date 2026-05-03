@@ -157,17 +157,3 @@ CREATE TABLE messages (
     FOREIGN KEY (sender_id) REFERENCES users(user_id),
     FOREIGN KEY (receiver_id) REFERENCES users(user_id)
 );
-
-CREATE TABLE advising_requests (
-    request_id INT AUTO_INCREMENT PRIMARY KEY,
-    student_user_id INT NOT NULL,
-    supervisor_user_id INT NOT NULL,
-    topic VARCHAR(255) NOT NULL,
-    problem VARCHAR(255) NOT NULL,
-    explanation TEXT NOT NULL,
-    status VARCHAR(50) DEFAULT 'Pending',
-    admin_response TEXT DEFAULT NULL,   -- <=== THIS IS THE NEW MAGIC COLUMN
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (student_user_id) REFERENCES users(user_id),
-    FOREIGN KEY (supervisor_user_id) REFERENCES users(user_id)
-);

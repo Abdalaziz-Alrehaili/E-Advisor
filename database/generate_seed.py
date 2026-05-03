@@ -38,6 +38,7 @@ PROFESSORS = [
     {"name": "Dr. Hussein Hijazi",   "base_mod": 0,  "var": 3, "is_sup": False},
 ]
 
+# Course Definitions for the Generator Engine
 COURSES = {
     1: {'avg': 93, 'var': 'norm', 'skew': None, 'prog': False}, 2: {'avg': 87, 'var': 'high', 'skew': None, 'prog': False},
     3: {'avg': 86, 'var': 'high', 'skew': None, 'prog': False}, 4: {'avg': 85, 'var': 'high', 'skew': None, 'prog': False},
@@ -105,18 +106,29 @@ def get_prof_course_offset(prof_id, course_id):
     random.seed()
     return offset
 
+# ADDED 'credit_load' param to penalize heavy semesters!
 def get_realistic_grade(course_id, general_apt, prog_apt, prof_id, is_summer=False, credit_load=15):
     c = COURSES.get(course_id, {'avg': 85, 'var': 'norm', 'skew': None, 'prog': False})
     prof_data = PROFESSORS[prof_id - 1] 
+    
+    # 1. Aptitude Anchor: Strongly tie their grade to their general aptitude (GPA anchor)
     modifier = general_apt * 2.5 
     if c['prog']: modifier += prog_apt
     modifier += prof_data['base_mod']
     modifier += get_prof_course_offset(prof_id, course_id)
-    if is_summer: modifier += 3 
-    if credit_load > 16: modifier -= (credit_load - 16) * 1.5 
-    elif credit_load < 13 and not is_summer: modifier += (13 - credit_load) * 1.0 
+    
+    if is_summer: 
+        modifier += 3 
+    
+    # 2. Credit Load Penalty: 18+ credits severely drops grades. 12 credits boosts them!
+    if credit_load > 16:
+        modifier -= (credit_load - 16) * 1.5 
+    elif credit_load < 13 and not is_summer:
+        modifier += (13 - credit_load) * 1.0 
+    
     sigma = 12 if c['var'] == 'high' else (3 if c['var'] == 'low' else 6)
     sigma += (prof_data['var'] / 2) 
+    
     score = random.gauss(c['avg'] + modifier, sigma)
     if c['skew'] == 'neg': score = max(score, random.gauss(94, 3))
     if c['skew'] == 'pos': score = min(score, random.gauss(70, 5))
@@ -139,29 +151,36 @@ def is_credit_unlocked(cid, completed_set):
     return True
 
 # ------------------------------------------
-# SECTION GENERATOR 
+# SECTION GENERATOR (UPDATED FOR NO BOTTLENECKS)
 # ------------------------------------------
 section_lookup = {} 
 section_sql_inserts = []
 sec_id_counter = 10000 
 
 TIMESLOTS = [
-    ("Sun-Tue-Thu", "08:00:00", "08:50:00"), ("Mon-Wed", "08:00:00", "09:15:00"),
-    ("Sun-Tue-Thu", "09:00:00", "09:50:00"), ("Mon-Wed", "09:30:00", "10:45:00"),
-    ("Sun-Tue-Thu", "10:00:00", "10:50:00"), ("Sun-Tue-Thu", "11:00:00", "11:50:00"),
-    ("Sun-Tue-Thu", "13:00:00", "13:50:00"), ("Sun-Tue-Thu", "14:00:00", "14:50:00"),
+    ("Sun-Tue-Thu", "08:00:00", "08:50:00"),
+    ("Mon-Wed", "08:00:00", "09:15:00"),
+    ("Sun-Tue-Thu", "09:00:00", "09:50:00"),
+    ("Mon-Wed", "09:30:00", "10:45:00"),
+    ("Sun-Tue-Thu", "10:00:00", "10:50:00"),
+    ("Sun-Tue-Thu", "11:00:00", "11:50:00"),
+    ("Sun-Tue-Thu", "13:00:00", "13:50:00"),
+    ("Sun-Tue-Thu", "14:00:00", "14:50:00"),
     ("Mon-Wed", "13:00:00", "14:15:00")
 ]
 
 for sem in range(1, 18): 
     for cid in PERFECT_PLAN:
         section_lookup[(cid, sem)] = []
+        
         chosen_slots = random.sample(TIMESLOTS, 2)
+        
         for sec_idx, slot in enumerate(chosen_slots):
             prof_id = random.randint(1, len(PROFESSORS))
             days, start_time, end_time = slot
             room = f"Room {random.randint(101, 599)}"
             sec_name = f"S{sec_idx + 1}"
+            
             section_lookup[(cid, sem)].append((sec_id_counter, prof_id))
             section_sql_inserts.append(f"({sec_id_counter}, {cid}, {sem}, '{sec_name}', {prof_id}, '{days}', '{start_time}', '{end_time}', '{room}', 30)")
             sec_id_counter += 1
@@ -191,20 +210,6 @@ def simulate_semesters(target_start_sem, pacing):
             continue
         elif sem == 3: continue
             
-        # --- NEW STRICT SUMMER TRAINING RULE ---
-        # If it's Summer, and Course 38 (CPIS-323) is unlocked (100+ credits), TAKE IT ALONE!
-        if is_summer and 38 not in completed and is_credit_unlocked(38, completed):
-            allocations.append({
-                'cid': 38, 
-                'sem': sem, 
-                'yr': year_num,
-                'placeholder': 'NULL',
-                'sem_load': 0
-            })
-            completed.add(38)
-            continue # This instantly ends the semester loop, guaranteeing it's taken alone!
-        # ----------------------------------------
-        
         if is_summer:
             if pacing == "ahead": target_min, target_max = 3, 9
             elif pacing == "on_track": target_min, target_max = 0, 6
@@ -222,8 +227,7 @@ def simulate_semesters(target_start_sem, pacing):
         cur_creds = 0
         sem_courses = []
         
-        # FIX: Explicitly exclude 38 from the normal core pool so it NEVER gets taken in a standard Fall/Spring semester
-        eligible_core = [c for c in CORE_MAJOR_COURSES if c != 38 and c not in completed and all(pr in completed for pr in PREREQS.get(c, [])) and is_credit_unlocked(c, completed)]
+        eligible_core = [c for c in CORE_MAJOR_COURSES if c not in completed and all(pr in completed for pr in PREREQS.get(c, [])) and is_credit_unlocked(c, completed)]
         for cid in eligible_core:
             c_cred = CREDITS.get(cid, 3)
             if cur_creds + c_cred <= target and cur_creds + c_cred <= (9 if is_summer else 20):
@@ -237,7 +241,7 @@ def simulate_semesters(target_start_sem, pacing):
                 c_cred = CREDITS.get(cid, 3)
                 if cur_creds + c_cred <= target:
                     free_taken += 1
-                    ph = 58 + min(free_taken, 3) 
+                    ph = f"(SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '{min(free_taken, 3)}')"
                     sem_courses.append({'cid': cid, 'placeholder': ph})
                     cur_creds += c_cred
 
@@ -249,7 +253,7 @@ def simulate_semesters(target_start_sem, pacing):
                 c_cred = CREDITS.get(cid, 3)
                 if cur_creds + c_cred <= 20:
                     free_taken += 1
-                    ph = 58 + min(free_taken, 3)
+                    ph = f"(SELECT course_id FROM courses WHERE course_prefix = 'FREE' AND course_number = '{min(free_taken, 3)}')"
                     sem_courses.append({'cid': cid, 'placeholder': ph})
                     cur_creds += c_cred
                     
@@ -259,7 +263,7 @@ def simulate_semesters(target_start_sem, pacing):
                 c_cred = CREDITS.get(cid, 3)
                 if cur_creds + c_cred <= 20:
                     elec_taken += 1
-                    ph = 55 + min(elec_taken, 3)
+                    ph = f"(SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND course_number = '{min(elec_taken, 3)}')"
                     sem_courses.append({'cid': cid, 'placeholder': ph})
                     cur_creds += c_cred
                     
@@ -278,7 +282,7 @@ def simulate_semesters(target_start_sem, pacing):
                 'sem': sem, 
                 'yr': year_num,
                 'placeholder': sc['placeholder'],
-                'sem_load': cur_creds
+                'sem_load': cur_creds # Passed to grader!
             })
             completed.add(sc['cid'])
             
@@ -308,6 +312,9 @@ TRUNCATE TABLE faculties;
 TRUNCATE TABLE users;
 SET FOREIGN_KEY_CHECKS = 1;
 
+-- ==========================================
+-- 1. Seed Faculties
+-- ==========================================
 INSERT INTO faculties (faculty_name) VALUES 
 ('Faculty of Computing and Information Technology'),
 ('Faculty of Science'),                              
@@ -316,6 +323,9 @@ INSERT INTO faculties (faculty_name) VALUES
 ('English Language Institute'),                      
 ('Faculty of Arts and Humanities');                  
 
+-- ==========================================
+-- 2. Seed Departments
+-- ==========================================
 INSERT INTO departments (faculty_id, dept_name) VALUES 
 (1, 'Department of Computer Science'),               
 (1, 'Department of Information Technology'),         
@@ -335,9 +345,15 @@ INSERT INTO departments (faculty_id, dept_name) VALUES
 (6, 'Department of Shariah and Islamic Studies'),    
 (6, 'Department of General Courses');                
 
+-- ==========================================
+-- 3. Seed Programs
+-- ==========================================
 INSERT INTO programs (dept_id, program_name, total_credits_required, duration_years) VALUES 
 (3, 'Bachelor of Science in Information Systems', 140, 5);
 
+-- ==========================================
+-- 4. Seed Courses
+-- ==========================================
 INSERT INTO courses (dept_id, course_prefix, course_number, course_name, credits) VALUES 
 (14, 'ELIS', '101', 'ENGLISH LANGUAGE-SCIENCE(1)', 0),
 (14, 'ELIS', '102', 'ENGLISH LANGUAGE-SCIENCE(2)', 2),
@@ -401,6 +417,9 @@ INSERT INTO courses (dept_id, course_prefix, course_number, course_name, credits
 (17, 'FREE', '2', 'Free Course II', 3),
 (17, 'FREE', '3', 'Free Course III', 3);
 
+-- ==========================================
+-- 5. Seed Prerequisites
+-- ==========================================
 INSERT INTO prerequisites (course_id, prereq_id) VALUES 
 ((SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '201'), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '101')),
 ((SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '301'), (SELECT course_id FROM courses WHERE course_prefix = 'ISLS' AND course_number = '201')),
@@ -438,9 +457,17 @@ INSERT INTO prerequisites (course_id, prereq_id) VALUES
 ((SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '428'), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '323')),
 ((SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '499'), (SELECT course_id FROM courses WHERE course_prefix = 'CPIS' AND course_number = '498'));
 
+-- ==========================================
+-- 6. Seed Semester Rules
+-- ==========================================
 INSERT INTO semester_rules (semester_type, max_credits, min_credits) VALUES
-('1', 20, 10), ('2', 20, 10), ('Summer', 9, 0);    
+('1', 20, 10),       
+('2', 20, 10),       
+('Summer', 9, 0);    
 
+-- ==========================================
+-- 7. Seed Semesters
+-- ==========================================
 INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES 
 ('First Semester 2021-2022', 1, FALSE, '2021-09-09', TRUE),
 ('Second Semester 2021-2022', 2, FALSE, '2022-01-20', TRUE),
@@ -461,6 +488,9 @@ INSERT INTO semesters (semester_name, rule_id, is_registration_open, registratio
 ('Second Semester 2026-2027', 2, FALSE, NULL, FALSE),
 ('Summer Semester 2027', 3, FALSE, NULL, FALSE);
 
+-- ==========================================
+-- 8. Seed Program Requirements
+-- ==========================================
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) VALUES 
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'BIO' AND course_number = '110'), 1, '1', 'core'),
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'CHEM' AND course_number = '110'), 1, '1', 'core'),
@@ -535,8 +565,9 @@ INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semes
 VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND course_number = '3'), 5, '2', 'elective');
 """
     f.write(static_sql)
-    f.write("\n")
+    f.write("\n-- ==========================================\n-- DYNAMIC ML DATA GENERATION\n-- ==========================================\n")
 
+    f.write("-- 9. Users\n")
     f.write("INSERT INTO users (username, password, first_name, last_name, role) VALUES \n")
     pw = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8" 
     users = [f"('admin1', '{pw}', 'Matthew', 'Williams', 'admin')"]
@@ -558,6 +589,7 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
         users.append(f"('hist_student{i}', '{pw}', '{fn}', '{ln}', 'student')")
     f.write(",\n".join(users) + ";\n\n")
 
+    f.write("-- 10. Professors Table Mapping\n")
     f.write("INSERT INTO professors (user_id, dept_id, is_supervisor, office_number) VALUES \n")
     profs = []
     for i, prof in enumerate(PROFESSORS):
@@ -567,15 +599,16 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
         profs.append(f"({user_id}, 3, {is_sup}, {room})")
     f.write(",\n".join(profs) + ";\n\n")
 
+    f.write("-- 11. Students\n")
     f.write("INSERT INTO students (user_id, program_id, admission_year, supervisor_id, is_graduated) VALUES \n")
     students = []
     
-    students.append("(17, 1, 2024, 1, FALSE)")  
-    students.append("(18, 1, 2024, 2, FALSE)")  
-    students.append("(19, 1, 2023, 2, FALSE)")  
-    students.append("(20, 1, 2023, 1, FALSE)")  
-    students.append("(21, 1, 2022, 1, FALSE)")  
-    students.append("(22, 1, 2022, 2, FALSE)")  
+    students.append("(17, 1, 2024, 1, FALSE)")  # S1 -> prof1
+    students.append("(18, 1, 2024, 2, FALSE)")  # S2 -> prof2
+    students.append("(19, 1, 2023, 2, FALSE)")  # S3 -> prof2
+    students.append("(20, 1, 2023, 1, FALSE)")  # S4 -> prof1
+    students.append("(21, 1, 2022, 1, FALSE)")  # S5 -> prof1
+    students.append("(22, 1, 2022, 2, FALSE)")  # S6 -> prof2
     
     for i in range(23, 23 + NUM_HISTORICAL_STUDENTS):
         sup_id = random.choice([1, 2]) 
@@ -583,6 +616,7 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
         students.append(f"({i}, 1, {admit_year}, {sup_id}, TRUE)")
     f.write(",\n".join(students) + ";\n\n")
 
+    f.write("-- 12. Sections (ML Professor Engine)\n")
     chunk_size = 300
     for i in range(0, len(section_sql_inserts), chunk_size):
         chunk = section_sql_inserts[i:i+chunk_size]
@@ -590,28 +624,32 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
         f.write(",\n".join(chunk) + ";\n")
     f.write("\n")
 
+    f.write("-- 13. Enrollments (Active Students)\n")
     f.write("INSERT INTO enrollments (student_id, section_id, course_id, semester_id, year_number, status, grade, placeholder_id) VALUES \n")
     enrolls = []
     
     profiles = [
-        {"id": 1, "gpa": 4.4, "start_sem": 7,  "pacing": "ahead"},    
-        {"id": 2, "gpa": 3.9, "start_sem": 7,  "pacing": "on_track"}, 
-        {"id": 3, "gpa": 4.2, "start_sem": 10, "pacing": "ahead"},    
-        {"id": 4, "gpa": 3.6, "start_sem": 10, "pacing": "behind"},   
-        {"id": 5, "gpa": 4.3, "start_sem": 13, "pacing": "on_track"}, 
-        {"id": 6, "gpa": 3.7, "start_sem": 13, "pacing": "behind"},   
+        {"id": 1, "gpa": 4.4, "start_sem": 7,  "pacing": "ahead"},    # Sup 1
+        {"id": 2, "gpa": 3.9, "start_sem": 7,  "pacing": "on_track"}, # Sup 2
+        {"id": 3, "gpa": 4.2, "start_sem": 10, "pacing": "ahead"},    # Sup 2
+        {"id": 4, "gpa": 3.6, "start_sem": 10, "pacing": "behind"},   # Sup 1
+        {"id": 5, "gpa": 4.3, "start_sem": 13, "pacing": "on_track"}, # Sup 1
+        {"id": 6, "gpa": 3.7, "start_sem": 13, "pacing": "behind"},   # Sup 2
     ]
     
     for p in profiles:
         allocs = simulate_semesters(p["start_sem"], p["pacing"])
         for a in allocs:
             grade = force_gpa_grade(p["gpa"])
+            
             available_sections = section_lookup.get((a['cid'], a['sem']), [(1, 1)])
             chosen_sec = random.choice(available_sections)
             sec_id = chosen_sec[0]
+            
             enrolls.append(f"({p['id']}, {sec_id}, {a['cid']}, {a['sem']}, {a['yr']}, 'completed', {grade}, {a['placeholder']})")
     f.write(",\n".join(enrolls) + ";\n\n")
 
+    f.write("-- 14. Enrollments (Historical ML Data)\n")
     hist_enrolls = []
     for student_id in range(7, 7 + NUM_HISTORICAL_STUDENTS):
         gen_apt = random.uniform(-4, 4)

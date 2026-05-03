@@ -12,13 +12,6 @@ function Profile({ user }) {
   const [selectedSemDetails, setSelectedSemDetails] = useState([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
 
-  const [showFormModal, setShowFormModal] = useState(false);
-  const [formData, setFormData] = useState({ topic: 'Section Expansion', problem: '', explanation: '' });
-  const [formStatus, setFormStatus] = useState(null);
-
-  const [myRequests, setMyRequests] = useState([]);
-  const [showRequestsModal, setShowRequestsModal] = useState(false);
-
   const fetchDraft = () => {
     fetch(`http://localhost:5000/my-draft/${user.user_id}`)
       .then(res => res.json())
@@ -44,15 +37,6 @@ function Profile({ user }) {
       });
   };
 
-  const fetchMyRequests = () => {
-      fetch(`http://localhost:5000/api/student/advising-requests/${user.user_id}`)
-          .then(res => res.json())
-          .then(data => {
-              if (!data.error) setMyRequests(data);
-          })
-          .catch(err => console.error("Error fetching my requests:", err));
-  };
-
   useEffect(() => {
     if (user && user.user_id) {
       fetch(`http://localhost:5000/my-grades/${user.user_id}`)
@@ -76,7 +60,6 @@ function Profile({ user }) {
         .catch(err => console.error("Supervisor fetch error:", err));
 
       fetchDraft();
-      fetchMyRequests(); 
     }
   }, [user]);
 
@@ -92,38 +75,7 @@ function Profile({ user }) {
       }
   };
 
-  const handleFormSubmit = (e) => {
-      e.preventDefault();
-      setFormStatus('loading');
-
-      fetch('http://localhost:5000/api/advising-request', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              student_user_id: user.user_id,
-              supervisor_user_id: supervisorInfo.supervisor_id,
-              topic: formData.topic,
-              problem: formData.problem,
-              explanation: formData.explanation
-          })
-      })
-      .then(res => res.json())
-      .then(data => {
-          if (data.success) {
-              setFormStatus('success');
-              setFormData({ topic: 'Section Expansion', problem: '', explanation: '' }); 
-              fetchMyRequests(); 
-              setTimeout(() => { setShowFormModal(false); setFormStatus(null); }, 2000); 
-          } else {
-              setFormStatus('error');
-          }
-      })
-      .catch(err => {
-          console.error(err);
-          setFormStatus('error');
-      });
-  };
-
+  // UPDATED: Now calculates GPA based on numerical grades!
   const calculateGPA = (academicRecords) => {
     if (!Array.isArray(academicRecords)) return "N/A";
     
@@ -137,11 +89,12 @@ function Profile({ user }) {
       if (g >= 70) return 3.0;
       if (g >= 65) return 2.5;
       if (g >= 60) return 2.0;
-      return 0.0; 
+      return 0.0; // F
     };
 
     let totalPoints = 0, totalCredits = 0;
     academicRecords.forEach(record => {
+      // Only count completed courses that have a numeric grade
       if (record.status === 'completed' && record.grade !== null && record.grade !== undefined) {
         const credits = Number(record.credits) || 0;
         totalPoints += getGradePoints(record.grade) * credits;
@@ -234,6 +187,7 @@ function Profile({ user }) {
 
       <div className="centered-content-container">
 
+        {/* --- NEW: LOGIN NOTIFICATION BANNER --- */}
         {isRegOpen && (
           <div className="alert hero-alert shadow-sm d-flex flex-column flex-md-row justify-content-between align-items-center mb-5" style={{ borderRadius: '12px', padding: '20px 30px' }}>
             <div className="d-flex align-items-center gap-4 mb-3 mb-md-0">
@@ -251,7 +205,7 @@ function Profile({ user }) {
           </div>
         )}
         
-        <div className="profile-info-header" style={{ width: '85vw', margin: '0 auto', borderBottom: '2px solid rgba(16, 73, 41, 0.15)', paddingBottom: '45px', marginBottom: '50px' }}>
+        <div className="profile-info-header" style={{ width: '75vw', margin: '0 auto', borderBottom: '2px solid rgba(16, 73, 41, 0.15)', paddingBottom: '45px', marginBottom: '50px' }}>
           
           <div style={{ width: '100%', textAlign: 'center', marginBottom: '40px' }}>
             <div 
@@ -281,7 +235,7 @@ function Profile({ user }) {
             gridTemplateColumns: '1fr 1fr', 
             alignItems: 'center', 
             rowGap: '30px', 
-            maxWidth: '1100px', 
+            maxWidth: '1000px', 
             margin: '0 auto', 
             position: 'relative',
             paddingTop: '10px'
@@ -312,34 +266,18 @@ function Profile({ user }) {
                 <span>Supervisor: {supervisorInfo ? `${supervisorInfo.first_name} ${supervisorInfo.last_name}` : 'Loading...'}</span>
                 
                 {supervisorInfo && (
-                  <div className="d-flex gap-2">
-                    <Link 
-                      to="/chat" 
-                      className="btn btn-sm rounded-pill text-white fw-bold position-relative d-flex align-items-center shadow-sm transition-all"
-                      style={{ backgroundColor: '#104929', border: 'none', padding: '6px 16px' }}
-                    >
-                      <i className="bi bi-chat-text-fill me-1"></i> Message
-                      {supervisorInfo.unread_count > 0 && (
-                        <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-light" style={{ fontSize: '0.7rem' }}>
-                          {supervisorInfo.unread_count}
-                        </span>
-                      )}
-                    </Link>
-                    <button 
-                        onClick={() => setShowRequestsModal(true)}
-                        className="btn btn-sm rounded-pill fw-bold shadow-sm transition-all"
-                        style={{ backgroundColor: '#f8f9fa', color: '#104929', border: '1px solid #104929', padding: '6px 16px' }}
-                    >
-                        <i className="bi bi-clock-history me-1"></i> History
-                    </button>
-                    <button 
-                        onClick={() => setShowFormModal(true)}
-                        className="btn btn-sm rounded-pill fw-bold shadow-sm transition-all text-white"
-                        style={{ backgroundColor: '#d97706', border: 'none', padding: '6px 16px' }}
-                    >
-                        <i className="bi bi-file-earmark-plus-fill me-1"></i> New Request
-                    </button>
-                  </div>
+                  <Link 
+                    to="/chat" 
+                    className="btn btn-sm rounded-pill text-white fw-bold position-relative d-flex align-items-center shadow-sm transition-all"
+                    style={{ backgroundColor: '#104929', border: 'none', padding: '6px 16px' }}
+                  >
+                    <i className="bi bi-chat-text-fill me-2"></i> Message
+                    {supervisorInfo.unread_count > 0 && (
+                      <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-light" style={{ fontSize: '0.7rem' }}>
+                        {supervisorInfo.unread_count}
+                      </span>
+                    )}
+                  </Link>
                 )}
               </h3>
             </div>
@@ -648,138 +586,6 @@ function Profile({ user }) {
             <div className="text-end mt-4">
               <button className="btn btn-secondary fw-bold px-4" onClick={() => setShowModal(false)}>Close</button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- STUDENT REQUEST HISTORY MODAL --- */}
-      {showRequestsModal && (
-        <div className="modal-overlay" onClick={() => setShowRequestsModal(false)}>
-          <div className="details-modal shadow-lg" style={{ maxWidth: '850px', borderTop: '10px solid #104929' }} onClick={e => e.stopPropagation()}>
-            <div className="d-flex justify-content-between align-items-center mb-4 border-bottom pb-3">
-              <h3 className="fw-bold m-0" style={{ color: '#104929' }}><i className="bi bi-clock-history me-2"></i>My Advising Requests</h3>
-              <button className="btn-close" onClick={() => setShowRequestsModal(false)}></button>
-            </div>
-            
-            <div className="table-responsive" style={{ maxHeight: '60vh' }}>
-                {myRequests.length === 0 ? (
-                    <div className="text-center py-5 text-muted">
-                        <i className="bi bi-inbox fs-1 mb-3 d-block text-secondary opacity-50"></i>
-                        <p>You have not submitted any requests yet.</p>
-                    </div>
-                ) : (
-                    <table className="table table-hover align-middle">
-                        <thead className="table-light">
-                            <tr>
-                                <th className="py-3" style={{ width: '15%' }}>Date Submitted</th>
-                                <th className="py-3" style={{ width: '20%' }}>Topic</th>
-                                <th className="py-3" style={{ width: '45%' }}>Issue Details</th>
-                                <th className="py-3 text-center" style={{ width: '20%' }}>Current Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {myRequests.map(req => (
-                                <tr key={req.request_id}>
-                                    <td className="small text-muted">{new Date(req.created_at).toLocaleDateString()}</td>
-                                    <td className="fw-bold"><span className="badge bg-light text-dark border">{req.topic}</span></td>
-                                    <td>
-                                        <div className="fw-bold small">{req.problem}</div>
-                                        <div className="text-muted small text-truncate" style={{ maxWidth: '250px' }} title={req.explanation}>
-                                            {req.explanation}
-                                        </div>
-                                        {/* --- DISPLAYS THE ADMIN NOTE TO THE STUDENT --- */}
-                                        {req.admin_response && (
-                                            <div className="p-2 mt-2 rounded shadow-sm" style={{ backgroundColor: '#eef6f1', color: '#104929', borderLeft: '3px solid #104929', whiteSpace: 'normal', fontSize: '0.8rem' }}>
-                                                <i className="bi bi-chat-left-text-fill me-1"></i><strong>Admin Response:</strong> {req.admin_response}
-                                            </div>
-                                        )}
-                                    </td>
-                                    <td className="text-center">
-                                        <span className={`badge rounded-pill ${
-                                            req.status === 'Pending' ? 'bg-warning text-dark' :
-                                            req.status === 'Forwarded to Admin' ? 'bg-primary' :
-                                            req.status === 'Approved' ? 'bg-success' :
-                                            req.status.includes('Denied') ? 'bg-danger' : 'bg-secondary'
-                                        }`} style={{ fontSize: '0.8rem', padding: '6px 12px' }}>
-                                            {req.status}
-                                        </span>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                )}
-            </div>
-            <div className="text-end mt-4 pt-3 border-top">
-                <button className="btn btn-secondary fw-bold px-4" onClick={() => setShowRequestsModal(false)}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- ADVISING FORM MODAL --- */}
-      {showFormModal && (
-        <div className="modal-overlay" onClick={() => setShowFormModal(false)}>
-          <div className="details-modal shadow-lg" style={{ maxWidth: '600px', borderTop: '10px solid #d97706' }} onClick={e => e.stopPropagation()}>
-            <div className="d-flex justify-content-between align-items-center mb-4 border-bottom pb-3">
-              <h3 className="fw-bold m-0" style={{ color: '#d97706' }}>Official Advising Request</h3>
-              <button className="btn-close" onClick={() => setShowFormModal(false)}></button>
-            </div>
-
-            {formStatus === 'success' && <div className="alert alert-success fw-bold">✔ Request sent to your advisor successfully!</div>}
-            {formStatus === 'error' && <div className="alert alert-danger fw-bold">✖ Failed to send request. Please try again.</div>}
-
-            <form onSubmit={handleFormSubmit}>
-                <div className="mb-3">
-                    <label className="fw-bold small mb-1 text-muted">Request Topic</label>
-                    <select 
-                        className="form-select fw-bold"
-                        value={formData.topic}
-                        onChange={(e) => setFormData({...formData, topic: e.target.value})}
-                    >
-                        <option value="Section Expansion">Section Expansion</option>
-                        <option value="Schedule Conflict">Schedule Conflict</option>
-                        <option value="Request for Additional Section">Request for Additional Section</option>
-                        <option value="Other">Other</option>
-                    </select>
-                </div>
-
-                <div className="mb-3">
-                    <label className="fw-bold small mb-1 text-muted">Problem Subject</label>
-                    <input 
-                        type="text" 
-                        className="form-control" 
-                        placeholder="e.g., Cannot register for CPIS-370"
-                        value={formData.problem}
-                        onChange={(e) => setFormData({...formData, problem: e.target.value})}
-                        required
-                    />
-                </div>
-
-                <div className="mb-4">
-                    <label className="fw-bold small mb-1 text-muted">Detailed Explanation</label>
-                    <textarea 
-                        className="form-control" 
-                        rows="5" 
-                        placeholder="Explain your situation in detail so your advisor can help..."
-                        value={formData.explanation}
-                        onChange={(e) => setFormData({...formData, explanation: e.target.value})}
-                        required
-                    ></textarea>
-                </div>
-
-                <div className="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
-                    <button type="button" className="btn btn-light fw-bold px-4" onClick={() => setShowFormModal(false)}>Cancel</button>
-                    <button 
-                        type="submit" 
-                        className="btn fw-bold px-4 text-white" 
-                        style={{ backgroundColor: '#d97706' }}
-                        disabled={formStatus === 'loading'}
-                    >
-                        {formStatus === 'loading' ? 'Sending...' : 'Submit Request'}
-                    </button>
-                </div>
-            </form>
           </div>
         </div>
       )}
