@@ -854,5 +854,139 @@ app.post('/admin/finalize-grades', (req, res) => {
     });
 });
 
+// ==========================================
+// ADVISING REQUEST FORM API
+// ==========================================
+app.post('/api/advising-request', (req, res) => {
+    console.log("🔥 [API] /api/advising-request was hit!");
+    console.log("📦 Incoming Request Body:", req.body);
+
+    const { student_user_id, supervisor_user_id, topic, problem, explanation } = req.body;
+
+    if (!student_user_id || !supervisor_user_id || !topic || !problem || !explanation) {
+        console.log("❌ [API] Validation Failed. Missing fields.");
+        return res.status(400).json({ error: "All fields are required." });
+    }
+
+    const sql = `
+        INSERT INTO advising_requests (student_user_id, supervisor_user_id, topic, problem, explanation)
+        VALUES (?, ?, ?, ?, ?)
+    `;
+
+    console.log("🚀 [API] Attempting Database Insert...");
+
+    db.query(sql, [student_user_id, supervisor_user_id, topic, problem, explanation], (err, result) => {
+        if (err) {
+            console.error("💥 [API] Database Error during insert:", err);
+            return res.status(500).json({ error: "Failed to submit request.", details: err.message });
+        }
+        console.log("✅ [API] Success! Request saved with ID:", result.insertId);
+        res.json({ success: true, message: "Form submitted successfully!" });
+    });
+});
+
+// FIXED: Route for the advisor to view their students' forms
+app.get('/api/advising-request/:supervisor_id', (req, res) => {
+    const supervisorId = req.params.supervisor_id;
+    console.log("📥 [Inbox] Fetching requests for Supervisor User ID:", supervisorId);
+
+    const sql = `
+        SELECT r.*, u.first_name, u.last_name 
+        FROM advising_requests r
+        JOIN users u ON r.student_user_id = u.user_id
+        WHERE r.supervisor_user_id = ?
+        ORDER BY r.created_at DESC
+    `;
+    
+    db.query(sql, [supervisorId], (err, results) => {
+        if (err) {
+            console.error("💥 [Inbox] Database error:", err);
+            return res.status(500).json({ error: err.message });
+        }
+        console.log(`✅ [Inbox] Found ${results.length} requests.`);
+        res.json(results);
+    });
+});
+
+// ==========================================
+// UPDATE ADVISING REQUEST STATUS
+// ==========================================
+app.put('/api/advising-request/:request_id/status', (req, res) => {
+    const { request_id } = req.params;
+    const { status } = req.body; // e.g., 'Forwarded to Admin' or 'Denied'
+
+    const sql = `UPDATE advising_requests SET status = ? WHERE request_id = ?`;
+    
+    db.query(sql, [status, request_id], (err, result) => {
+        if (err) {
+            console.error("💥 [Inbox] Error updating status:", err);
+            return res.status(500).json({ error: "Failed to update status." });
+        }
+        res.json({ success: true, message: `Request updated to ${status}` });
+    });
+});
+
+// ==========================================
+// ADMIN: GET FORWARDED ADVISING REQUESTS
+// ==========================================
+app.get('/api/admin/advising-requests', (req, res) => {
+    const sql = `
+        SELECT r.*, st.first_name AS student_first, st.last_name AS student_last, 
+               sup.first_name AS sup_first, sup.last_name AS sup_last
+        FROM advising_requests r
+        JOIN users st ON r.student_user_id = st.user_id
+        JOIN users sup ON r.supervisor_user_id = sup.user_id
+        WHERE r.status = 'Forwarded to Admin'
+        ORDER BY r.created_at ASC
+    `;
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error("💥 [Admin Inbox] Error fetching requests:", err);
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(results);
+    });
+});
+
+// ==========================================
+// STUDENT: GET MY ADVISING REQUESTS
+// ==========================================
+app.get('/api/student/advising-requests/:student_id', (req, res) => {
+    const studentId = req.params.student_id;
+    const sql = `
+        SELECT r.*, sup.first_name AS sup_first, sup.last_name AS sup_last
+        FROM advising_requests r
+        JOIN users sup ON r.supervisor_user_id = sup.user_id
+        WHERE r.student_user_id = ?
+        ORDER BY r.created_at DESC
+    `;
+    db.query(sql, [studentId], (err, results) => {
+        if (err) {
+            console.error("💥 [Student Requests] Database error:", err);
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(results);
+    });
+});
+
+// ==========================================
+// UPDATE ADVISING REQUEST STATUS (WITH ADMIN NOTE)
+// ==========================================
+app.put('/api/advising-request/:request_id/status', (req, res) => {
+    const { request_id } = req.params;
+    const { status, admin_response } = req.body; 
+
+    const sql = `UPDATE advising_requests SET status = ?, admin_response = ? WHERE request_id = ?`;
+    
+    db.query(sql, [status, admin_response || null, request_id], (err, result) => {
+        if (err) {
+            console.error("💥 [Inbox] Error updating status:", err);
+            return res.status(500).json({ error: "Failed to update status." });
+        }
+        res.json({ success: true, message: `Request updated to ${status}` });
+    });
+});
+
+
 const PORT = 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
