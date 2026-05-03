@@ -1,23 +1,24 @@
 import React, { useState, useEffect } from 'react';
 
-function AdminDashboard() {
+function AdminDashboard({ activeView = 'home', onReqUpdate }) {
+  
   const [buttons, setButtons] = useState([]);
   
-  // State for our Date Picker Modal
   const [openPrompt, setOpenPrompt] = useState(null);
   const [closeDate, setCloseDate] = useState('');
 
-  // State for Section Capacity Management
   const [sectionsList, setSectionsList] = useState([]);
   const [editCapacityPrompt, setEditCapacityPrompt] = useState(null);
   const [newCapacity, setNewCapacity] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // State & Data for Adding Classes
   const [allCourses, setAllCourses] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // --- ADVISING REQUESTS (ADMIN INBOX) ---
+  const [advisingRequests, setAdvisingRequests] = useState([]);
+  const [adminNotes, setAdminNotes] = useState({}); // <--- NEW: State to hold text box notes
   
-  // Pre-defined options based on your database seed
   const predefinedProfessors = [
     'Dr. Ahmad Mansour', 'Dr. Khaled Al-Sayed', 'Prof. Mustafa Osman',
     'Dr. Ibrahim Hassan', 'Dr. Omar Bakri', 'Dr. Sami Al-Qahtani',
@@ -51,6 +52,7 @@ function AdminDashboard() {
   useEffect(() => {
     fetchBoard();
     fetchSections();
+    fetchAdminRequests(); 
     
     fetch('http://localhost:5000/courses')
         .then(res => res.json())
@@ -82,6 +84,37 @@ function AdminDashboard() {
           else setSectionsList(data);
       })
       .catch(err => console.error("Error fetching sections:", err));
+  };
+
+  const fetchAdminRequests = () => {
+      fetch('http://localhost:5000/api/admin/advising-requests')
+      .then(res => res.json())
+      .then(data => {
+          if (!data.error) setAdvisingRequests(data);
+      })
+      .catch(err => console.error("Error fetching requests:", err));
+  };
+
+  // --- NEW: SENDS THE ADMIN NOTE WITH THE STATUS ---
+  const handleAdminRequestAction = (requestId, status) => {
+      const note = adminNotes[requestId] || ''; 
+      if(window.confirm(`Are you sure you want to mark this request as '${status}'?`)) {
+          fetch(`http://localhost:5000/api/advising-request/${requestId}/status`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status, admin_response: note }) 
+          })
+          .then(res => res.json())
+          .then(data => {
+              if (data.success) {
+                  fetchAdminRequests(); 
+                  if (onReqUpdate) onReqUpdate(); 
+              } else {
+                  alert("Error updating request.");
+              }
+          })
+          .catch(err => console.error(err));
+      }
   };
 
   const handleActionClick = (btn) => {
@@ -187,7 +220,6 @@ function AdminDashboard() {
       }
   };
 
-  // --- NEW: Trigger Mass Grading ---
   const handleFinalizeGrades = () => {
       if (window.confirm("Are you sure? This will finalize all 'In Progress' courses across the university and assign random passing grades to students. This simulates the end of a semester.")) {
           fetch('http://localhost:5000/admin/finalize-grades', { method: 'POST' })
@@ -195,7 +227,6 @@ function AdminDashboard() {
           .then(data => {
               if (data.success) {
                   alert("All 'In Progress' courses have been officially graded and completed!");
-                  // Optional: Refresh board if needed
               } else {
                   alert("Error: " + data.error);
               }
@@ -228,131 +259,208 @@ function AdminDashboard() {
 
       <div className="centered-content-container pb-5">
         
-        <div className="text-center mb-5">
-          <h1 className="fw-bold" style={{ color: '#104929' }}>Registration Period Controller</h1>
+        {/* --- CLEAN DYNAMIC HEADER --- */}
+        <div className="row mb-5" style={{ maxWidth: '1400px', margin: '0 auto' }}>
+          <div className="col-md-12 text-center">
+            <h1 className="fw-bold m-0" style={{ color: '#104929' }}>
+               {activeView === 'home' ? 'Registration Period Controller' : 'Advising Requests Inbox'}
+            </h1>
+          </div>
         </div>
 
-        <div className="mb-5" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '40px', width: '100%', maxWidth: '1400px' }}>
-          {buttons.map((btn, idx) => (
-            <div key={idx}>
-              <div 
-                className={`admin-big-btn ${btn.state} shadow-sm w-100`}
-                onClick={() => handleActionClick(btn)}
-              >
-                <h2 className="fw-bold mb-4" style={{ letterSpacing: '0.5px' }}>{btn.semester_name}</h2>
-                
-                <div className="badge px-5 py-3 fs-5 rounded-pill shadow-sm" style={{ backgroundColor: 'rgba(255,255,255,0.9)', color: '#000000' }}>
-                  {btn.state === 'green' && '🟢 CLICK TO OPEN'}
-                  {btn.state === 'red' && '🔴 CLICK TO CLOSE'}
-                  {btn.state === 'grey' && '🔒 LOCKED (WAITING TURN)'}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* --- NEW: ACADEMIC ACTIONS PANEL --- */}
-        <div className="d-flex justify-content-center mb-5 border-bottom pb-5" style={{ maxWidth: '1400px', margin: '0 auto' }}>
-            <button 
-                className="btn fw-bold px-5 py-3 shadow-sm d-flex align-items-center gap-2" 
-                style={{ backgroundColor: '#d97706', color: 'white', borderRadius: '12px', fontSize: '1.1rem' }}
-                onClick={handleFinalizeGrades}
-            >
-                <i className="bi bi-mortarboard-fill fs-4"></i> Simulate End of Semester (Publish Grades)
-            </button>
-        </div>
-
-        {/* --- CAPACITY MANAGER --- */}
-        <div className="w-100 mt-5 pt-4 border-top" style={{ maxWidth: '1400px', margin: '0 auto' }}>
-            
-            <div className="d-flex justify-content-between align-items-center mb-4">
-                <h2 className="fw-bold m-0" style={{ color: '#104929' }}>Course Section Capacities</h2>
-                
-                <div className="d-flex gap-3 align-items-center">
-                    <div className="position-relative" style={{ width: '350px' }}>
-                        <i className="bi bi-search search-icon"></i>
-                        <input 
-                            type="text" 
-                            className="form-control rounded-pill shadow-sm" 
-                            placeholder="Search by course code or name..." 
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            style={{ paddingLeft: '40px', border: '1px solid #ced4da' }}
-                        />
-                    </div>
+        {activeView === 'home' ? (
+          <>
+            <div className="mb-5" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '40px', width: '100%', maxWidth: '1400px', margin: '0 auto' }}>
+              {buttons.map((btn, idx) => (
+                <div key={idx}>
+                  <div 
+                    className={`admin-big-btn ${btn.state} shadow-sm w-100`}
+                    onClick={() => handleActionClick(btn)}
+                  >
+                    <h2 className="fw-bold mb-4" style={{ letterSpacing: '0.5px' }}>{btn.semester_name}</h2>
                     
-                    <button 
-                        className="btn fw-bold shadow-sm d-flex align-items-center gap-2 px-4" 
-                        style={{ backgroundColor: '#104929', color: 'white', borderRadius: '30px' }}
-                        onClick={() => setShowAddModal(true)}
-                    >
-                        <i className="bi bi-plus-lg"></i> Add Section
-                    </button>
+                    <div className="badge px-5 py-3 fs-5 rounded-pill shadow-sm" style={{ backgroundColor: 'rgba(255,255,255,0.9)', color: '#000000' }}>
+                      {btn.state === 'green' && <><i className="bi bi-unlock-fill text-success me-2"></i> CLICK TO OPEN</>}
+                      {btn.state === 'red' && <><i className="bi bi-lock-fill text-danger me-2"></i> CLICK TO CLOSE</>}
+                      {btn.state === 'grey' && <><i className="bi bi-clock-history text-secondary me-2"></i> LOCKED (WAITING TURN)</>}
+                    </div>
+                  </div>
                 </div>
+              ))}
             </div>
 
-            <div className="bg-white rounded shadow-sm border overflow-hidden">
-                <table className="table table-hover align-middle mb-0">
-                    <thead className="table-light">
-                        <tr>
-                            <th className="px-4 py-3">Course</th>
-                            <th className="px-4 py-3">Name</th>
-                            <th className="px-4 py-3 text-center">Section</th>
-                            <th className="px-4 py-3 text-center">Enrollment / Capacity</th>
-                            <th className="px-4 py-3 text-end">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filteredSections.length > 0 ? (
-                            filteredSections.map((sec) => {
-                                const isFull = sec.enrolled_count >= sec.max_capacity;
-                                return (
-                                    <tr key={sec.section_id}>
-                                        <td className="px-4 fw-bold text-secondary">{sec.course_prefix}-{sec.course_number}</td>
-                                        <td className="px-4">{sec.course_name}</td>
-                                        <td className="px-4 text-center"><span className="badge bg-secondary">{sec.section_name}</span></td>
-                                        <td className="px-4 text-center">
-                                            <span className={`fw-bold ${isFull ? 'text-danger' : 'text-success'}`}>
-                                                {sec.enrolled_count}
-                                            </span>
-                                            <span className="text-muted"> / {sec.max_capacity}</span>
-                                        </td>
-                                        <td className="px-4 text-end">
-                                            <div className="d-flex gap-2 justify-content-end">
-                                                <button 
-                                                    className="btn btn-sm btn-outline-dark fw-bold px-3"
-                                                    onClick={() => {
-                                                        setEditCapacityPrompt(sec);
-                                                        setNewCapacity(sec.max_capacity);
-                                                    }}
-                                                >
-                                                    Adjust Limit
-                                                </button>
-                                                <button 
-                                                    className="btn btn-sm btn-outline-danger fw-bold px-3"
-                                                    onClick={() => handleDeleteSection(sec.section_id)}
-                                                >
-                                                    Remove
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })
-                        ) : (
-                            <tr>
-                                <td colSpan="5" className="text-center py-5 text-muted">
-                                    No courses found matching "{searchTerm}"
-                                </td>
-                            </tr>
-                        )}
-                    </tbody>
-                </table>
+            <div className="d-flex justify-content-center mb-5 border-bottom pb-5" style={{ maxWidth: '1400px', margin: '0 auto' }}>
+                <button 
+                    className="btn fw-bold px-5 py-3 shadow-sm d-flex align-items-center gap-2" 
+                    style={{ backgroundColor: '#d97706', color: 'white', borderRadius: '12px', fontSize: '1.1rem' }}
+                    onClick={handleFinalizeGrades}
+                >
+                    <i className="bi bi-mortarboard-fill fs-4"></i> Simulate End of Semester (Publish Grades)
+                </button>
             </div>
-        </div>
+
+            {/* --- CAPACITY MANAGER --- */}
+            <div className="w-100" style={{ maxWidth: '1400px', margin: '0 auto' }}>
+                <div className="d-flex justify-content-between align-items-center mb-4">
+                    <h2 className="fw-bold m-0" style={{ color: '#104929' }}>Course Section Capacities</h2>
+                    
+                    <div className="d-flex gap-3 align-items-center">
+                        <div className="position-relative" style={{ width: '350px' }}>
+                            <i className="bi bi-search search-icon"></i>
+                            <input 
+                                type="text" 
+                                className="form-control rounded-pill shadow-sm" 
+                                placeholder="Search by course code or name..." 
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                style={{ paddingLeft: '40px', border: '1px solid #ced4da' }}
+                            />
+                        </div>
+                        
+                        <button 
+                            className="btn fw-bold shadow-sm d-flex align-items-center gap-2 px-4" 
+                            style={{ backgroundColor: '#104929', color: 'white', borderRadius: '30px' }}
+                            onClick={() => setShowAddModal(true)}
+                        >
+                            <i className="bi bi-plus-lg"></i> Add Section
+                        </button>
+                    </div>
+                </div>
+
+                <div className="bg-white rounded shadow-sm border overflow-hidden">
+                    <table className="table table-hover align-middle mb-0">
+                        <thead className="table-light">
+                            <tr>
+                                <th className="px-4 py-3">Course</th>
+                                <th className="px-4 py-3">Name</th>
+                                <th className="px-4 py-3 text-center">Section</th>
+                                <th className="px-4 py-3 text-center">Enrollment / Capacity</th>
+                                <th className="px-4 py-3 text-end">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filteredSections.length > 0 ? (
+                                filteredSections.map((sec) => {
+                                    const isFull = sec.enrolled_count >= sec.max_capacity;
+                                    return (
+                                        <tr key={sec.section_id}>
+                                            <td className="px-4 fw-bold text-secondary">{sec.course_prefix}-{sec.course_number}</td>
+                                            <td className="px-4">{sec.course_name}</td>
+                                            <td className="px-4 text-center"><span className="badge bg-secondary">{sec.section_name}</span></td>
+                                            <td className="px-4 text-center">
+                                                <span className={`fw-bold ${isFull ? 'text-danger' : 'text-success'}`}>
+                                                    {sec.enrolled_count}
+                                                </span>
+                                                <span className="text-muted"> / {sec.max_capacity}</span>
+                                            </td>
+                                            <td className="px-4 text-end">
+                                                <div className="d-flex gap-2 justify-content-end">
+                                                    <button 
+                                                        className="btn btn-sm btn-outline-dark fw-bold px-3"
+                                                        onClick={() => {
+                                                            setEditCapacityPrompt(sec);
+                                                            setNewCapacity(sec.max_capacity);
+                                                        }}
+                                                    >
+                                                        Adjust Limit
+                                                    </button>
+                                                    <button 
+                                                        className="btn btn-sm btn-outline-danger fw-bold px-3"
+                                                        onClick={() => handleDeleteSection(sec.section_id)}
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            ) : (
+                                <tr>
+                                    <td colSpan="5" className="text-center py-5 text-muted">
+                                        No courses found matching "{searchTerm}"
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+          </>
+        ) : (
+          /* --- ADVISING REQUESTS INBOX (ADMIN) --- */
+          <div className="w-100" style={{ maxWidth: '1400px', margin: '0 auto', minHeight: '60vh' }}>
+              <div className="bg-white rounded shadow-sm border overflow-hidden">
+                  <table className="table table-hover align-middle mb-0">
+                      <thead className="table-light">
+                          <tr>
+                              <th className="px-4 py-3" style={{ width: '10%' }}>Date</th>
+                              <th className="px-4 py-3" style={{ width: '15%' }}>Student / Supervisor</th>
+                              <th className="px-4 py-3" style={{ width: '12%' }}>Topic</th>
+                              <th className="px-4 py-3" style={{ width: '20%' }}>Problem Details</th>
+                              <th className="px-4 py-3" style={{ width: '23%' }}>Admin Response (Optional)</th>
+                              <th className="px-4 py-3 text-center" style={{ width: '20%' }}>Action</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          {advisingRequests.length > 0 ? (
+                              advisingRequests.map(req => (
+                                  <tr key={req.request_id}>
+                                      <td className="px-4 text-muted small">{new Date(req.created_at).toLocaleDateString()}</td>
+                                      <td className="px-4">
+                                          <div className="fw-bold">{req.student_first} {req.student_last}</div>
+                                          <div className="text-muted small">Prof: {req.sup_last}</div>
+                                      </td>
+                                      <td className="px-4"><span className="badge bg-secondary">{req.topic}</span></td>
+                                      <td className="px-4 text-truncate" style={{ maxWidth: '200px' }}>
+                                          <div className="fw-bold small text-dark mb-1">{req.problem}</div>
+                                          <div className="text-muted small text-truncate" title={req.explanation}>{req.explanation}</div>
+                                      </td>
+                                      <td className="px-4">
+                                          {/* --- THE NEW TEXT BOX --- */}
+                                          <textarea 
+                                              className="form-control form-control-sm bg-light" 
+                                              placeholder="Reply to student/prof..." 
+                                              rows="2"
+                                              value={adminNotes[req.request_id] || ''}
+                                              onChange={(e) => setAdminNotes({...adminNotes, [req.request_id]: e.target.value})}
+                                              style={{ fontSize: '0.8rem', resize: 'none', border: '1px solid #ced4da' }}
+                                          ></textarea>
+                                      </td>
+                                      <td className="px-4 text-center">
+                                          <div className="d-flex gap-2 justify-content-center">
+                                              <button 
+                                                  className="btn btn-sm btn-success fw-bold px-3 shadow-sm" 
+                                                  onClick={() => handleAdminRequestAction(req.request_id, 'Approved')}
+                                              >
+                                                  Approve
+                                              </button>
+                                              <button 
+                                                  className="btn btn-sm btn-danger fw-bold px-3 shadow-sm" 
+                                                  onClick={() => handleAdminRequestAction(req.request_id, 'Denied by Admin')}
+                                              >
+                                                  Deny
+                                              </button>
+                                          </div>
+                                      </td>
+                                  </tr>
+                              ))
+                          ) : (
+                              <tr>
+                                  <td colSpan="6" className="text-center py-5 text-muted">
+                                      <i className="bi bi-check-circle fs-2 d-block mb-2 text-success opacity-50"></i>
+                                      No pending requests forwarded to the administration.
+                                  </td>
+                              </tr>
+                          )}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+        )}
       </div>
 
-      {/* --- ADD NEW SECTION MODAL --- */}
+      {/* --- MODALS BELOW --- */}
       {showAddModal && (
           <div className="modal-overlay">
              <div className="bg-white rounded text-start" style={{ width: '600px', padding: '40px', borderTop: '8px solid #104929', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', maxHeight: '90vh', overflowY: 'auto' }}>
