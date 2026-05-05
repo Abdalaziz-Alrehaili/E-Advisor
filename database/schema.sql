@@ -82,7 +82,8 @@ CREATE TABLE students (
     user_id INT NOT NULL,
     program_id INT NOT NULL,
     admission_year YEAR NOT NULL,
-    supervisor_id INT NULL, -- Now points to professors table
+    current_semester_index INT DEFAULT 1, -- Added for robust progress tracking
+    supervisor_id INT NULL,
     is_graduated BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
     FOREIGN KEY (program_id) REFERENCES programs(program_id),
@@ -106,7 +107,7 @@ CREATE TABLE sections (
     course_id INT NOT NULL,
     semester_id INT NOT NULL,
     section_name VARCHAR(10),
-    professor_id INT NULL, -- Now points to professors table
+    professor_id INT NULL,
     days VARCHAR(20),
     start_time TIME,
     end_time TIME,
@@ -166,7 +167,7 @@ CREATE TABLE advising_requests (
     problem VARCHAR(255) NOT NULL,
     explanation TEXT NOT NULL,
     status VARCHAR(50) DEFAULT 'Pending',
-    admin_response TEXT DEFAULT NULL,   -- <=== THIS IS THE NEW MAGIC COLUMN
+    admin_response TEXT DEFAULT NULL,   
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_user_id) REFERENCES users(user_id),
     FOREIGN KEY (supervisor_user_id) REFERENCES users(user_id)

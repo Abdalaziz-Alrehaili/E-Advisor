@@ -138,19 +138,17 @@ function SupervisorDashboard({ user, activeView = 'roster', onReqUpdate }) {
   };
 
   const getProgressMetric = (student) => {
-    const currentYear = 2026; 
-    let yearsEnrolled = currentYear - student.admission_year;
-    if (yearsEnrolled <= 0) yearsEnrolled = 1; 
-
-    const creditsPerYear = student.total_credits_required / student.duration_years;
-    let expectedCredits = Math.round(yearsEnrolled * creditsPerYear);
+    // We now get the EXACT expected credits straight from the database's official program plan!
+    let expectedCredits = Number(student.expected_credits) || 1; 
     
-    if (expectedCredits > student.total_credits_required) expectedCredits = student.total_credits_required;
+    // Cap it at the total required so they don't look "Behind" once they finish the program
+    if (expectedCredits > student.total_credits_required) {
+        expectedCredits = student.total_credits_required;
+    }
 
     const completed = Number(student.credits_completed) || 0;
     const difference = completed - expectedCredits;
 
-    if (expectedCredits === 0) return 0;
     return (difference / expectedCredits) * 100; 
   };
 

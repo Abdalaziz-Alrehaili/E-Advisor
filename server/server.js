@@ -58,9 +58,23 @@ app.get('/api/supervisor/students/:user_id', (req, res) => {
             u.first_name, 
             u.last_name, 
             st.admission_year,
+            st.current_semester_index,
             p.total_credits_required,
             p.duration_years,
             IFNULL((SELECT SUM(c.credits) FROM enrollments e JOIN courses c ON e.course_id = c.course_id WHERE e.student_id = st.student_id AND e.status = 'completed'), 0) AS credits_completed,
+            
+            -- ✨ THE FIX: EXACT OFFICIAL PROGRAM PLAN MATH ✨
+            IFNULL((
+                SELECT SUM(c.credits)
+                FROM program_requirements pr
+                JOIN courses c ON pr.course_id = c.course_id
+                WHERE pr.program_id = st.program_id
+                AND (
+                    ((pr.ideal_year - 1) * 3) + 
+                    CASE pr.ideal_semester WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN 'Summer' THEN 3 END
+                ) <= IFNULL(st.current_semester_index, 1)
+            ), 1) AS expected_credits,
+            
             IFNULL((SELECT ROUND(AVG(
                 CASE 
                     WHEN e.grade >= 95 THEN 5.0 
@@ -156,10 +170,33 @@ io.on('connection', (socket) => {
 });
 
 app.get('/students', (req, res) => {
-    const sql = `SELECT s.student_id as id, u.first_name, u.last_name, u.username as email FROM students s JOIN users u ON s.user_id = u.user_id`;
+    // ✨ THE FIX: Now sending the exact official program plan credits to the student portal too! ✨
+    const sql = `
+        SELECT 
+            s.student_id as id, 
+            u.user_id, 
+            u.first_name, 
+            u.last_name, 
+            u.username as email, 
+            s.admission_year, 
+            s.current_semester_index,
+            IFNULL((SELECT SUM(c.credits) FROM enrollments e JOIN courses c ON e.course_id = c.course_id WHERE e.student_id = s.student_id AND e.status = 'completed'), 0) AS credits_completed,
+            IFNULL((
+                SELECT SUM(c.credits)
+                FROM program_requirements pr
+                JOIN courses c ON pr.course_id = c.course_id
+                WHERE pr.program_id = s.program_id
+                AND (
+                    ((pr.ideal_year - 1) * 3) + 
+                    CASE pr.ideal_semester WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN 'Summer' THEN 3 END
+                ) <= IFNULL(s.current_semester_index, 1)
+            ), 1) AS expected_credits
+        FROM students s 
+        JOIN users u ON s.user_id = u.user_id
+    `;
     db.query(sql, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json(results.map(r => ({ id: r.id, name: `${r.first_name} ${r.last_name}`, email: r.email })));
+        res.json(results);
     });
 });
 
@@ -170,7 +207,6 @@ app.get('/courses', (req, res) => {
     });
 });
 
-// --- ML COMPATIBILITY FIX: JOIN PROFESSORS SO PLAN.JS DISPLAYS NAMES ---
 app.get('/sections', (req, res) => {
     const sql = `
         SELECT s.*, 
@@ -317,7 +353,6 @@ app.get('/my-draft/:user_id', (req, res) => {
                     db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [ids], (err, dbCourses) => {
                         if (err) return res.status(500).json({ error: err.message });
                         
-                        // FIX: Merge the database course data with the saved JSON so we don't lose the selected_section_id!
                         const mergedCourses = coursesArr.map(savedCourse => {
                             const dbInfo = dbCourses.find(c => c.course_id === (savedCourse.course_id || savedCourse));
                             return { ...dbInfo, ...savedCourse };
@@ -497,28 +532,32 @@ app.post('/admin/semester-action', (req, res) => {
                     db.query('UPDATE semesters SET is_registration_open = 0, is_completed = TRUE WHERE semester_id = ?', [semester_id], (err) => {
                         if (err) return res.status(500).json({error: err.message});
                         
-                        const nextName = generateNextSemesterName(semester_name);
-                        db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
-                            const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
-                            
-                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err, newSemResult) => {
-                                if (err) return res.status(500).json({error: err.message});
+                        // ✨ THE MAGIC FIX: Automatically age up all active students by 1 semester!
+                        db.query('UPDATE students SET current_semester_index = current_semester_index + 1 WHERE is_graduated = FALSE', (err) => {
+                            if (err) return res.status(500).json({error: err.message});
+
+                            const nextName = generateNextSemesterName(semester_name);
+                            db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
+                                const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
                                 
-                                const new_semester_id = newSemResult.insertId;
+                                db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err, newSemResult) => {
+                                    if (err) return res.status(500).json({error: err.message});
+                                    
+                                    const new_semester_id = newSemResult.insertId;
 
-                                // --- ML COMPATIBILITY FIX: USE PROFESSOR_ID IN AUTO-GENERATE ---
-                                const autoGenerateSQL1 = `
-                                    INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
-                                    SELECT course_id, ?, 'S1', 1, 'Sun-Tue-Thu', '08:00:00', '09:20:00', 'Bldg 1-R106', 30 FROM courses
-                                `;
-                                const autoGenerateSQL2 = `
-                                    INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
-                                    SELECT course_id, ?, 'S2', 2, 'Mon-Wed', '10:00:00', '11:20:00', 'Bldg 2-R110', 30 FROM courses
-                                `;
+                                    const autoGenerateSQL1 = `
+                                        INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
+                                        SELECT course_id, ?, 'S1', 1, 'Sun-Tue-Thu', '08:00:00', '09:20:00', 'Bldg 1-R106', 30 FROM courses
+                                    `;
+                                    const autoGenerateSQL2 = `
+                                        INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
+                                        SELECT course_id, ?, 'S2', 2, 'Mon-Wed', '10:00:00', '11:20:00', 'Bldg 2-R110', 30 FROM courses
+                                    `;
 
-                                db.query(autoGenerateSQL1, [new_semester_id], () => {
-                                    db.query(autoGenerateSQL2, [new_semester_id], () => {
-                                        res.json({success: true});
+                                    db.query(autoGenerateSQL1, [new_semester_id], () => {
+                                        db.query(autoGenerateSQL2, [new_semester_id], () => {
+                                            res.json({success: true});
+                                        });
                                     });
                                 });
                             });
@@ -553,7 +592,6 @@ app.get('/admin/plans', (req, res) => {
     });
 });
 
-// --- ML COMPATIBILITY FIX: MAP FRONTEND NAMES TO PROFESSOR_ID ---
 app.post('/admin/sections', (req, res) => {
     const { course_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity } = req.body;
 
@@ -569,13 +607,12 @@ app.post('/admin/sections', (req, res) => {
 
         const semester_id = semResult[0].semester_id;
 
-        // Map the string name from the frontend to an integer ID for the database
         const profMap = {
             'Dr. Ahmad Mansour': 1, 'Dr. Khaled Al-Sayed': 2, 'Prof. Mustafa Osman': 3,
             'Dr. Ibrahim Hassan': 4, 'Dr. Omar Bakri': 5, 'Dr. Sami Al-Qahtani': 6,
             'Dr. Yahya Jameel': 7, 'Prof. Nasser Idris': 8, 'Dr. Suleiman Taha': 9, 'Dr. Waleed Saeed': 10
         };
-        const professor_id = profMap[professor_name] || 1; // Default to ID 1 if not found
+        const professor_id = profMap[professor_name] || 1; 
 
         const sql = `
             INSERT INTO sections (course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity)
@@ -702,6 +739,31 @@ app.get('/api/recommendations/:user_id', (req, res) => {
     });
 });
 
+// ==========================================
+// LIVE COURSE AVERAGES ENGINE
+// ==========================================
+app.get('/api/course-stats', (req, res) => {
+    const sql = `
+        SELECT 
+            c.course_id,
+            c.course_prefix,
+            c.course_number,
+            c.course_name,
+            IFNULL(ROUND(AVG(e.grade), 2), 85.00) AS live_course_average
+        FROM courses c
+        LEFT JOIN enrollments e 
+            ON c.course_id = e.course_id 
+            AND e.status = 'completed' 
+            AND e.grade IS NOT NULL
+        GROUP BY c.course_id
+    `;
+    
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
 app.get('/api/ml/extract-training-data', (req, res) => {
     const sql = `
         SELECT 
@@ -822,9 +884,6 @@ app.post('/api/predict', (req, res) => {
     });
 });
 
-// ==========================================
-// SIMULATE END OF SEMESTER (MASS GRADING)
-// ==========================================
 app.post('/admin/finalize-grades', (req, res) => {
     db.query("SELECT enrollment_id FROM enrollments WHERE status = 'undergoing'", (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -837,7 +896,6 @@ app.post('/admin/finalize-grades', (req, res) => {
         let hasError = false;
 
         results.forEach(row => {
-            // ML-COMPATIBLE FIX: Generate a random numerical grade between 60 and 100
             const randomGrade = Math.floor(Math.random() * (100 - 60 + 1)) + 60;
             
             db.query("UPDATE enrollments SET status = 'completed', grade = ? WHERE enrollment_id = ?", [randomGrade, row.enrollment_id], (err) => {
@@ -854,17 +912,10 @@ app.post('/admin/finalize-grades', (req, res) => {
     });
 });
 
-// ==========================================
-// ADVISING REQUEST FORM API
-// ==========================================
 app.post('/api/advising-request', (req, res) => {
-    console.log("🔥 [API] /api/advising-request was hit!");
-    console.log("📦 Incoming Request Body:", req.body);
-
     const { student_user_id, supervisor_user_id, topic, problem, explanation } = req.body;
 
     if (!student_user_id || !supervisor_user_id || !topic || !problem || !explanation) {
-        console.log("❌ [API] Validation Failed. Missing fields.");
         return res.status(400).json({ error: "All fields are required." });
     }
 
@@ -873,23 +924,16 @@ app.post('/api/advising-request', (req, res) => {
         VALUES (?, ?, ?, ?, ?)
     `;
 
-    console.log("🚀 [API] Attempting Database Insert...");
-
     db.query(sql, [student_user_id, supervisor_user_id, topic, problem, explanation], (err, result) => {
         if (err) {
-            console.error("💥 [API] Database Error during insert:", err);
             return res.status(500).json({ error: "Failed to submit request.", details: err.message });
         }
-        console.log("✅ [API] Success! Request saved with ID:", result.insertId);
         res.json({ success: true, message: "Form submitted successfully!" });
     });
 });
 
-// FIXED: Route for the advisor to view their students' forms
 app.get('/api/advising-request/:supervisor_id', (req, res) => {
     const supervisorId = req.params.supervisor_id;
-    console.log("📥 [Inbox] Fetching requests for Supervisor User ID:", supervisorId);
-
     const sql = `
         SELECT r.*, u.first_name, u.last_name 
         FROM advising_requests r
@@ -899,36 +943,11 @@ app.get('/api/advising-request/:supervisor_id', (req, res) => {
     `;
     
     db.query(sql, [supervisorId], (err, results) => {
-        if (err) {
-            console.error("💥 [Inbox] Database error:", err);
-            return res.status(500).json({ error: err.message });
-        }
-        console.log(`✅ [Inbox] Found ${results.length} requests.`);
+        if (err) return res.status(500).json({ error: err.message });
         res.json(results);
     });
 });
 
-// ==========================================
-// UPDATE ADVISING REQUEST STATUS
-// ==========================================
-app.put('/api/advising-request/:request_id/status', (req, res) => {
-    const { request_id } = req.params;
-    const { status } = req.body; // e.g., 'Forwarded to Admin' or 'Denied'
-
-    const sql = `UPDATE advising_requests SET status = ? WHERE request_id = ?`;
-    
-    db.query(sql, [status, request_id], (err, result) => {
-        if (err) {
-            console.error("💥 [Inbox] Error updating status:", err);
-            return res.status(500).json({ error: "Failed to update status." });
-        }
-        res.json({ success: true, message: `Request updated to ${status}` });
-    });
-});
-
-// ==========================================
-// ADMIN: GET FORWARDED ADVISING REQUESTS
-// ==========================================
 app.get('/api/admin/advising-requests', (req, res) => {
     const sql = `
         SELECT r.*, st.first_name AS student_first, st.last_name AS student_last, 
@@ -940,17 +959,11 @@ app.get('/api/admin/advising-requests', (req, res) => {
         ORDER BY r.created_at ASC
     `;
     db.query(sql, (err, results) => {
-        if (err) {
-            console.error("💥 [Admin Inbox] Error fetching requests:", err);
-            return res.status(500).json({ error: err.message });
-        }
+        if (err) return res.status(500).json({ error: err.message });
         res.json(results);
     });
 });
 
-// ==========================================
-// STUDENT: GET MY ADVISING REQUESTS
-// ==========================================
 app.get('/api/student/advising-requests/:student_id', (req, res) => {
     const studentId = req.params.student_id;
     const sql = `
@@ -961,17 +974,11 @@ app.get('/api/student/advising-requests/:student_id', (req, res) => {
         ORDER BY r.created_at DESC
     `;
     db.query(sql, [studentId], (err, results) => {
-        if (err) {
-            console.error("💥 [Student Requests] Database error:", err);
-            return res.status(500).json({ error: err.message });
-        }
+        if (err) return res.status(500).json({ error: err.message });
         res.json(results);
     });
 });
 
-// ==========================================
-// UPDATE ADVISING REQUEST STATUS (WITH ADMIN NOTE)
-// ==========================================
 app.put('/api/advising-request/:request_id/status', (req, res) => {
     const { request_id } = req.params;
     const { status, admin_response } = req.body; 
@@ -979,14 +986,10 @@ app.put('/api/advising-request/:request_id/status', (req, res) => {
     const sql = `UPDATE advising_requests SET status = ?, admin_response = ? WHERE request_id = ?`;
     
     db.query(sql, [status, admin_response || null, request_id], (err, result) => {
-        if (err) {
-            console.error("💥 [Inbox] Error updating status:", err);
-            return res.status(500).json({ error: "Failed to update status." });
-        }
+        if (err) return res.status(500).json({ error: "Failed to update status." });
         res.json({ success: true, message: `Request updated to ${status}` });
     });
 });
-
 
 const PORT = 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
