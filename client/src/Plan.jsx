@@ -19,6 +19,9 @@ function Plan({ user }) {
     const [studentSemesterIndex, setStudentSemesterIndex] = useState(5);
     const [dbCreditsCompleted, setDbCreditsCompleted] = useState(0);
     const [dbExpectedCredits, setDbExpectedCredits] = useState(1);
+    const [studentGrades, setStudentGrades] = useState([]); // ✨ NEW ✨
+
+    // --- LIVE COURSE STATS ---
 
     // --- LIVE COURSE STATS ---
     const [courseStats, setCourseStats] = useState({});
@@ -128,6 +131,12 @@ function Plan({ user }) {
                     }
                 })
                 .catch(err => console.error("Error fetching draft:", err));
+
+            // ✨ PASTE NEW FETCH HERE ✨
+            fetch(`http://localhost:5000/my-grades/${user.user_id}`)
+                .then(res => res.json())
+                .then(data => setStudentGrades(data))
+                .catch(err => console.error("Error fetching chronological grades:", err));
         }
     }, [user]);
 
@@ -506,9 +515,56 @@ function Plan({ user }) {
             setShowModal(false);
             return;
         }
-        const filtered = selectedCourses.filter(c => isPreviewPlaceholder ? c.placeholder_id !== previewCourse.course_id : c.course_id !== previewCourse.course_id);
+
+        // Determine if the course is a Core requirement or an Elective/Free course
+        const isCore = curriculum.some(core => core.course_id === evaluatedCourse.course_id && !isPlaceholder(core));
+        let targetPlaceholderId = null;
+
+        const existingSelection = selectedCourses.find(c => c.course_id === evaluatedCourse.course_id);
+
+        if (!isCore) {
+            if (existingSelection && existingSelection.placeholder_id) {
+                // If updating an already selected elective, keep its assigned slot
+                targetPlaceholderId = existingSelection.placeholder_id;
+            } else {
+                // New selection: Find the lowest available placeholder slot
+                const isElective = (evaluatedCourse.course_prefix || '').toUpperCase() === 'CPIS';
+                const searchPrefix = isElective ? 'ELEC' : 'FREE';
+                const searchName = isElective ? 'ELECTIVE' : 'FREE';
+
+                const availableSlots = curriculum.filter(c =>
+                    ((c.course_prefix || '').toUpperCase().includes(searchPrefix) || (c.course_name || '').toUpperCase().includes(searchName)) &&
+                    c.status !== 'completed' && c.status !== 'undergoing' &&
+                    !selectedCourses.some(sc => sc.placeholder_id === c.course_id && sc.course_id !== evaluatedCourse.course_id)
+                ).sort((a, b) => {
+                    // Sort to ensure FREE-1 gets filled before FREE-2, etc.
+                    const numA = parseInt((a.course_number || '').replace(/\D/g, '')) || 0;
+                    const numB = parseInt((b.course_number || '').replace(/\D/g, '')) || 0;
+                    return numA - numB;
+                });
+
+                if (availableSlots.length > 0) {
+                    targetPlaceholderId = availableSlots[0].course_id;
+                } else {
+                    alert(`You have already filled all your ${isElective ? 'Elective' : 'Free'} course requirements!`);
+                    return;
+                }
+            }
+        }
+
+        // Clean up old instances of this course OR the specific slot we are taking
+        const filtered = selectedCourses.filter(c =>
+            c.course_id !== evaluatedCourse.course_id &&
+            (!targetPlaceholderId || c.placeholder_id !== targetPlaceholderId)
+        );
+
         const newSelection = { ...evaluatedCourse, selected_section_id: previewSectionId };
-        if (isPreviewPlaceholder) newSelection.placeholder_id = previewCourse.course_id;
+
+        // Bind the placeholder so the Roadmap and Dashboard can track it!
+        if (targetPlaceholderId) {
+            newSelection.placeholder_id = targetPlaceholderId;
+        }
+
         setSelectedCourses([...filtered, newSelection]);
         setShowModal(false);
     };
@@ -683,7 +739,88 @@ function Plan({ user }) {
     const predictedSemesterGPA = totalCredits > 0 ? (predictedSemPoints / totalCredits) : 0;
     const currentTotalPoints = currentGPA * totalCompletedCredits;
     const newCumulativeGPA = (totalCompletedCredits + totalCredits) > 0 ? ((currentTotalPoints + predictedSemPoints) / (totalCompletedCredits + totalCredits)) : 0;
-    const gpaChange = newCumulativeGPA - currentGPA;
+    // FIXED: Calculate the difference using the exact rounded numbers shown on the screen
+    const gpaChange = Number(newCumulativeGPA.toFixed(2)) - Number(currentGPA.toFixed(2));
+    // ==========================================
+    // CHART DATA GENERATOR
+    // ==========================================
+    const gpaHistoryData = (() => {
+        const history = [];
+        let cumulativePoints = 0;
+        let cumulativeCredits = 0;
+
+        const chronologicalGroups = {};
+
+        // Group strictly by actual year taken and actual semester taken!
+        studentGrades.filter(c => c.status === 'completed' && c.grade).forEach(c => {
+            const yr = c.year_number || 1;
+            const semType = c.actual_rule_id === 1 ? 'S1' : (c.actual_rule_id === 2 ? 'S2' : 'Summer');
+            const termKey = `Y${yr} ${semType}`;
+
+            const sortKey = yr * 10 + (c.actual_rule_id || 1);
+
+            if (!chronologicalGroups[sortKey]) {
+                chronologicalGroups[sortKey] = { label: termKey, courses: [] };
+            }
+            chronologicalGroups[sortKey].courses.push(c);
+        });
+
+        // Loop chronologically to build accurate cumulative history
+        Object.keys(chronologicalGroups).sort((a, b) => Number(a) - Number(b)).forEach(key => {
+            const group = chronologicalGroups[key];
+
+            let termPoints = 0;
+            let termCredits = 0;
+            group.courses.forEach(c => {
+                const gpaVal = gradeToGPA(c.grade);
+                // Fixes the 0-credit bug where Summer Training was being forced to 3 credits!
+                const cr = c.credits !== null && c.credits !== undefined ? Number(c.credits) : 3;
+                termPoints += gpaVal * cr;
+                termCredits += cr;
+            });
+
+            const termGpa = termCredits > 0 ? (termPoints / termCredits) : 0;
+            cumulativePoints += termPoints;
+            cumulativeCredits += termCredits;
+            const cumGpa = cumulativeCredits > 0 ? (cumulativePoints / cumulativeCredits) : 0;
+
+            history.push({
+                label: group.label,
+                termGpa: termGpa,
+                cumGpa: cumGpa,
+                isPrediction: false
+            });
+        });
+
+        // Add Predicted Semester Data
+        if (selectedCourses.length > 0 && totalCredits >= minCredits && !isInvalidLoad) {
+            let predLabel = `Y${regYear} `;
+            if (regSemKey === '1') predLabel += 'S1';
+            else if (regSemKey === '2') predLabel += 'S2';
+            else predLabel += 'Summer';
+
+            history.push({
+                label: predLabel,
+                termGpa: predictedSemesterGPA,
+                cumGpa: newCumulativeGPA,
+                isPrediction: true
+            });
+        }
+
+        return history;
+    })();
+
+    // ==========================================
+    // DYNAMIC CHART ZOOM MATH
+    // ==========================================
+    const chartGpas = gpaHistoryData.map(d => d.cumGpa);
+    const minGpa = chartGpas.length > 0 ? Math.min(...chartGpas) : 0;
+    const maxGpa = chartGpas.length > 0 ? Math.max(...chartGpas) : 5.0;
+
+    // Auto-scale the view: Drop the floor 0.15 below their worst GPA, cap the ceiling 0.1 above their best.
+    const chartMin = Math.max(0, minGpa - 0.15);
+    const chartMax = Math.min(5.0, maxGpa + 0.10);
+    const chartRange = (chartMax - chartMin) || 1; // Fallback to prevent division by zero
 
     return (
         <div className="container-fluid plan-page-container bg-light min-vh-100 py-5">
@@ -804,7 +941,7 @@ function Plan({ user }) {
                                         })
                                     ) : (
                                         <div className="text-center p-4 text-muted small border border-dashed rounded">
-                                            No courses match your selected filters.
+                                            No available courses match your selected filters.
                                         </div>
                                     )}
                                 </div>
@@ -982,8 +1119,10 @@ function Plan({ user }) {
                                     <h1 className="display-2 fw-bold m-0" style={{ color: '#104929', textShadow: '2px 2px 4px rgba(0,0,0,0.1)' }}>
                                         {newCumulativeGPA.toFixed(2)}
                                     </h1>
-                                    <div className={`mt-3 badge rounded-pill px-4 py-2 fs-6 shadow-sm ${gpaChange >= 0 ? 'bg-success' : 'bg-danger'}`}>
-                                        {gpaChange >= 0 ? '▲' : '▼'} {Math.abs(gpaChange).toFixed(2)} {gpaChange >= 0 ? 'positive' : 'negative'}
+                                    <div className={`mt-3 badge rounded-pill px-4 py-2 fs-6 shadow-sm ${gpaChange > 0 ? 'bg-success' : gpaChange < 0 ? 'bg-danger' : 'bg-secondary'}`}>
+                                        {gpaChange > 0 ? '▲ ' : (gpaChange < 0 ? '▼ ' : '')}
+                                        {Math.abs(gpaChange).toFixed(2)}
+                                        {gpaChange > 0 ? ' positive' : (gpaChange < 0 ? ' negative' : ' neutral')}
                                     </div>
                                     <div className="mt-3 text-center small fw-bold bg-light px-3 py-2 rounded border w-100">
                                         <div className="text-muted">Current GPA: <span className="text-dark">{currentGPA.toFixed(2)}</span></div>
@@ -993,13 +1132,13 @@ function Plan({ user }) {
                                 {/* RIGHT: HARD METRICS */}
                                 <div className="col-md-4 ps-4 d-flex flex-column justify-content-center gap-4">
                                     <div>
-                                        <div className="text-muted small fw-bold text-uppercase mb-1"><i className="bi bi-mortarboard-fill me-2"></i>Current Credits Done vs Credits Done After Semester</div>
+                                        <div className="text-muted small fw-bold text-uppercase mb-1"><i className="bi bi-mortarboard-fill me-2"></i>Credits Done After Semester</div>
                                         <h4 className="fw-bold m-0 text-dark">
                                             {totalCompletedCredits} <span className="text-muted fs-6">/ {totalProgramCredits}</span> <span className="text-success mx-1">→</span> {totalCompletedCredits + totalCredits} <span className="text-muted fs-6">/ {totalProgramCredits}</span>
                                         </h4>
                                     </div>
                                     <div>
-                                        <div className="text-muted small fw-bold text-uppercase mb-1"><i className="bi bi-pie-chart-fill me-2"></i>Projected Ahead/Behind Plan</div>
+                                        <div className="text-muted small fw-bold text-uppercase mb-1"><i className="bi bi-pie-chart-fill me-2"></i>percentage behind/ahead official program plan</div>
                                         <h3 className={`fw-bold m-0 ${projectedProgress.color}`}>{projectedProgress.label}</h3>
                                     </div>
                                     <div>
@@ -1012,7 +1151,81 @@ function Plan({ user }) {
                         </div>
                     )}
                 </div>
+                {/* ========================================== */}
+                {/* NATIVE REACT BAR CHART                     */}
+                {/* ========================================== */}
+                {!isInvalidLoad && gpaHistoryData.length > 0 && (
+                    <div className="p-4 rounded-4 shadow-sm border bg-white mb-5">
+                        <div className="d-flex justify-content-between align-items-center mb-4">
+                            <h5 className="fw-bold m-0" style={{ color: '#104929' }}>
+                                <i className="bi bi-bar-chart-fill me-2"></i>Semester GPA Progression
+                            </h5>
+                        </div>
 
+                        {/* Main Chart Area */}
+                        <div className="d-flex justify-content-around" style={{ height: '250px', borderBottom: '2px solid #adb5bd', position: 'relative', marginTop: '20px', marginBottom: '30px' }}>
+
+                            {/* Y-axis markings (Background Grid) */}
+                            <div className="position-absolute w-100 h-100" style={{ zIndex: 0, opacity: 0.15, pointerEvents: 'none', bottom: 0 }}>
+                                <div style={{ position: 'absolute', bottom: '100%', width: '100%', borderBottom: '1px dashed #000' }}></div>
+                                <div style={{ position: 'absolute', bottom: '80%', width: '100%', borderBottom: '1px dashed #000' }}></div>
+                                <div style={{ position: 'absolute', bottom: '60%', width: '100%', borderBottom: '1px dashed #000' }}></div>
+                                <div style={{ position: 'absolute', bottom: '40%', width: '100%', borderBottom: '1px dashed #000' }}></div>
+                                <div style={{ position: 'absolute', bottom: '20%', width: '100%', borderBottom: '1px dashed #000' }}></div>
+                            </div>
+
+                            {/* Render Columns */}
+                            {gpaHistoryData.map((data, index) => {
+                                // ✨ Swapped to cumGpa ✨
+                                const heightPct = Math.max(2, ((data.cumGpa - chartMin) / chartRange) * 100);
+
+                                // ✨ NEW COLORS: Pink (#db2777) for Predicted, Purple (#6b21a8) for Past ✨
+                                const barColor = data.isPrediction ? '#db2777' : '#6b21a8';
+
+                                return (
+                                    <div key={index} className="d-flex flex-column justify-content-end align-items-center position-relative" style={{ zIndex: 1, height: '100%', width: '60px' }}>
+
+                                        {/* Value Label (Floats right above the bar) */}
+                                        <div className="fw-bold mb-1 small" style={{ color: barColor }}>
+                                            {data.cumGpa.toFixed(2)} {/* ✨ Swapped to cumGpa ✨ */}
+                                        </div>
+
+                                        {/* The Native HTML Bar. Hover shows the term GPA instead! */}
+                                        <div
+                                            className="rounded-top shadow-sm transition-all"
+                                            style={{
+                                                height: `${Math.max(2, heightPct)}%`,
+                                                width: '40px',
+                                                backgroundColor: barColor,
+                                                opacity: data.isPrediction ? 0.8 : 1,
+                                                backgroundImage: data.isPrediction ? 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.15) 10px, rgba(255,255,255,0.15) 20px)' : 'none',
+                                            }}
+                                            title={`Term GPA: ${data.termGpa.toFixed(2)}`}
+                                        ></div>
+
+                                        {/* X-axis Label (Anchored absolutely BELOW the baseline) */}
+                                        <div className="position-absolute text-muted fw-bold" style={{ top: '100%', paddingTop: '8px', fontSize: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                            {data.label}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {/* Legend */}
+                        <div className="d-flex justify-content-center gap-4 mt-4 pt-2 small fw-bold">
+                            <div className="d-flex align-items-center"><span className="d-inline-block rounded me-2" style={{ width: '14px', height: '14px', backgroundColor: '#6b21a8' }}></span>Past Semesters</div>
+                            <div className="d-flex align-items-center">
+                                <span className="d-inline-block rounded me-2" style={{
+                                    width: '14px', height: '14px',
+                                    backgroundColor: '#db2777',
+                                    backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(255,255,255,0.2) 3px, rgba(255,255,255,0.2) 6px)'
+                                }}></span>
+                                Predicted Semester
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {/* --- DYNAMIC FOOTER --- */}
                 <div className="mt-5 p-4 rounded-4 bg-white shadow-lg border d-flex justify-content-between align-items-center sticky-bottom" style={{ bottom: '20px', zIndex: 50 }}>
 
