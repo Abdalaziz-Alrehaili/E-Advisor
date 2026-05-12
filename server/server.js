@@ -32,16 +32,6 @@ const db = mysql.createPool({
 
 const hashPassword = (password) => crypto.createHash('sha256').update(password).digest('hex');
 
-// ✨ BULLETPROOF JSON PARSER (Fixes Drafts not turning blue and seats not increasing) ✨
-const parseJsonSafe = (data) => {
-    if (!data) return [];
-    if (Array.isArray(data)) return data;
-    if (typeof data === 'string') {
-        try { return JSON.parse(data); } catch(e) { return []; }
-    }
-    return [];
-};
-
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
     const hashedPassword = hashPassword(password.trim());
@@ -73,6 +63,7 @@ app.get('/api/supervisor/students/:user_id', (req, res) => {
             p.duration_years,
             IFNULL((SELECT SUM(c.credits) FROM enrollments e JOIN courses c ON e.course_id = c.course_id WHERE e.student_id = st.student_id AND e.status = 'completed'), 0) AS credits_completed,
             
+            -- ✨ THE FIX: EXACT OFFICIAL PROGRAM PLAN MATH ✨
             IFNULL((
                 SELECT SUM(c.credits)
                 FROM program_requirements pr
@@ -232,7 +223,11 @@ app.get('/sections', (req, res) => {
 
             let draftCounts = {};
             drafts.forEach(draft => {
-                let courses = parseJsonSafe(draft.selected_courses_json);
+                let courses = [];
+                try { 
+                    const parsed = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; 
+                    courses = Array.isArray(parsed) ? parsed : (parsed.courses || []);
+                } catch (e) { courses = []; }
                 courses.forEach(c => {
                     if (c.selected_section_id) {
                         draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
@@ -357,9 +352,12 @@ app.get('/my-draft/:user_id', (req, res) => {
 
                 if (draftResults.length > 0) {
                     const draft = draftResults[0];
-                    let coursesArr = parseJsonSafe(draft.selected_courses_json);
-                    
-                    if (coursesArr.length === 0) return res.json({ ...draft, courses: [] });
+                    let coursesArr = [];
+                    try { 
+                        const parsed = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; 
+                        coursesArr = Array.isArray(parsed) ? parsed : (parsed.courses || []);
+                    } catch (e) { coursesArr = []; }
+                    if (!coursesArr || coursesArr.length === 0) return res.json({ ...draft, courses: [] });
 
                     const ids = coursesArr.map(c => c.course_id || c);
                     db.query(`SELECT course_id, course_prefix, course_number, course_name, credits FROM courses WHERE course_id IN (?)`, [ids], (err, dbCourses) => {
@@ -414,7 +412,11 @@ app.post('/save-plan', (req, res) => {
 
                 let draftCounts = {};
                 drafts.forEach(draft => {
-                    let courses = parseJsonSafe(draft.selected_courses_json);
+                    let courses = [];
+                    try { 
+                        const parsed = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; 
+                        courses = Array.isArray(parsed) ? parsed : (parsed.courses || []);
+                    } catch (e) { courses = []; }
                     courses.forEach(c => {
                         if (c.selected_section_id) {
                             draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
@@ -469,29 +471,24 @@ app.delete('/delete-plan/:user_id', (req, res) => {
     });
 });
 
-// ==========================================
-// ADMIN DASHBOARD & TIMELINE ENGINE
-// ==========================================
-
-function generateNextSemesterName(currentName) {
-    if (currentName.toLowerCase().includes('summer')) {
-        const yearMatch = currentName.match(/\d{4}/);
-        if (yearMatch) return currentName.replace(yearMatch[0], (parseInt(yearMatch[0]) + 1).toString());
-    } else {
-        const yearsMatch = currentName.match(/(\d{4})-(\d{4})/);
-        if (yearsMatch) return currentName.replace(`${yearsMatch[1]}-${yearsMatch[2]}`, `${parseInt(yearsMatch[1]) + 1}-${parseInt(yearsMatch[2]) + 1}`);
+function generateNextSemesterName(currentName, nextRule) {
+    const yearMatch = currentName.match(/\d{4}/g);
+    if (!yearMatch) return currentName + " (Next)";
+    
+    if (nextRule === 1) { 
+        const startYear = parseInt(yearMatch[yearMatch.length - 1]);
+        return `First Semester ${startYear}-${startYear + 1}`;
+    } else if (nextRule === 2) {
+        return currentName.replace("First", "Second");
+    } else if (nextRule === 3) {
+        const endYear = parseInt(yearMatch[1] || yearMatch[0]);
+        return `Summer Semester ${endYear}`;
     }
     return currentName + " (Next)";
 }
 
 app.get('/admin/semester-board', (req, res) => {
-    // Selects the 3 latest semesters generated in the timeline
-    db.query(`
-        SELECT s1.* FROM semesters s1
-        JOIN (SELECT rule_id, MAX(semester_id) as max_id FROM semesters GROUP BY rule_id) s2
-        ON s1.semester_id = s2.max_id
-        ORDER BY s1.rule_id ASC
-    `, (err, results) => {
+    db.query(`SELECT s1.* FROM semesters s1 JOIN (SELECT rule_id, MAX(semester_id) as max_id FROM semesters GROUP BY rule_id) s2 ON s1.semester_id = s2.max_id ORDER BY s1.rule_id ASC`, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
 
         let buttons = results.map(s => {
@@ -500,87 +497,60 @@ app.get('/admin/semester-board', (req, res) => {
         });
 
         const openSem = buttons.find(b => b.is_registration_open === 1);
+        let activeSem = null;
 
         if (openSem) {
             buttons = buttons.map(b => b.semester_id === openSem.semester_id ? { ...b, state: 'red' } : { ...b, state: 'grey' });
+            activeSem = openSem;
         } else {
-            // Find the lowest ID semester that hasn't been opened yet (registration_close_date IS NULL)
             const unopened = buttons.filter(b => b.registration_close_date === null);
             if (unopened.length > 0) {
-                let lowestIdBtn = unopened.reduce((min, b) => b.semester_id < min.semester_id ? b : min, unopened[0]);
-                const btnIndex = buttons.findIndex(b => b.semester_id === lowestIdBtn.semester_id);
-                if(btnIndex !== -1) buttons[btnIndex].state = 'green';
+                let nextBtn = unopened.reduce((min, b) => b.semester_id < min.semester_id ? b : min, unopened[0]);
+                const btnIndex = buttons.findIndex(b => b.semester_id === nextBtn.semester_id);
+                if(btnIndex !== -1) {
+                    buttons[btnIndex].state = 'green';
+                    activeSem = buttons[btnIndex];
+                }
             }
+        }
+
+        // ✨ UI FIX: "Time Travel Math" to dynamically project future names onto Grey buttons ✨
+        if (activeSem) {
+            const match = activeSem.semester_name.match(/\d{4}/);
+            let baseYear = match ? parseInt(match[0]) : new Date().getFullYear();
+            
+            // If Summer is active, its extracted year is the end of the academic cycle, so pull it back by 1
+            if (activeSem.rule_id === 3) baseYear -= 1; 
+
+            buttons.forEach(btn => {
+                if (btn.state === 'grey') {
+                    let targetBaseYear = baseYear;
+                    
+                    // If the grey button's rule is lower than the active one, it belongs to NEXT year!
+                    if (btn.rule_id < activeSem.rule_id) {
+                        targetBaseYear += 1; 
+                    }
+
+                    // Assign the beautiful, future-proofed names
+                    if (btn.rule_id === 1) btn.semester_name = `First Semester ${targetBaseYear}-${targetBaseYear + 1}`;
+                    else if (btn.rule_id === 2) btn.semester_name = `Second Semester ${targetBaseYear}-${targetBaseYear + 1}`;
+                    else if (btn.rule_id === 3) btn.semester_name = `Summer Semester ${targetBaseYear + 1}`;
+                }
+            });
         }
 
         res.json(buttons);
     });
 });
 
-app.get('/admin/sections', (req, res) => {
-    // Grab the LATEST open or target semester
-    const sqlSem = `
-        SELECT semester_id FROM semesters 
-        WHERE is_registration_open = 1 OR registration_close_date IS NULL 
-        ORDER BY is_registration_open DESC, semester_id ASC LIMIT 1
-    `;
-
-    db.query(sqlSem, (err, semResult) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (semResult.length === 0) return res.json([]);
-
-        const targetSemesterId = semResult[0].semester_id;
-
-        const sql = `
-            SELECT 
-                s.section_id, c.course_prefix, c.course_number, c.course_name, s.section_name, s.max_capacity,
-                (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.section_id AND e.status = 'undergoing') as enrolled_count
-            FROM sections s
-            JOIN courses c ON s.course_id = c.course_id
-            WHERE s.semester_id = ?
-            ORDER BY c.course_prefix, c.course_number, s.section_name
-        `;
-
-        db.query(sql, [targetSemesterId], (err, sections) => {
-            if (err) return res.status(500).json({ error: err.message });
-
-            db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ?', [targetSemesterId], (err, drafts) => {
-                if (err) return res.status(500).json({ error: err.message });
-
-                let draftCounts = {};
-                drafts.forEach(draft => {
-                    let courses = parseJsonSafe(draft.selected_courses_json);
-                    courses.forEach(c => {
-                        if (c.selected_section_id) {
-                            draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
-                        }
-                    });
-                });
-
-                const finalSections = sections.map(sec => {
-                    const drafted = draftCounts[sec.section_id] || 0;
-                    return {
-                        ...sec,
-                        enrolled_count: sec.enrolled_count + drafted
-                    };
-                });
-
-                res.json(finalSections);
-            });
-        });
-    });
-});
-
 app.post('/admin/semester-action', (req, res) => {
     const { semester_id, action, semester_name, close_date } = req.body;
     
-    // ✨ HELPER FUNCTION: Generates randomized sections with high variation ✨
     const generateSections = (semId, callback) => {
-        // ✨ THE FIX: Wipe out any existing unused sections so we get a fresh, randomized batch every time we open! ✨
+        // ✨ WIPE UNUSED GHOST SECTIONS EVERY TIME WE OPEN ✨
         db.query('DELETE FROM sections WHERE semester_id = ? AND section_id NOT IN (SELECT section_id FROM enrollments WHERE semester_id = ? AND section_id IS NOT NULL)', [semId, semId], (err) => {
             if (err) return res.status(500).json({ error: err.message });
 
-            // Do not generate sections for placeholders (ELEC / FREE)
             db.query('SELECT course_id FROM courses WHERE course_prefix NOT IN ("ELEC", "FREE")', (err, courses) => {
                 if (err) return res.status(500).json({ error: err.message });
 
@@ -628,6 +598,7 @@ app.post('/admin/semester-action', (req, res) => {
         db.query('UPDATE semesters SET is_registration_open = 0', () => {
             db.query('UPDATE semesters SET is_registration_open = 1, registration_close_date = ? WHERE semester_id = ?', [close_date, semester_id], (err) => {
                 if (err) return res.status(500).json({error: err.message});
+                
                 generateSections(semester_id, (genErr) => {
                     if (genErr) return res.status(500).json({error: genErr.message});
                     res.json({success: true});
@@ -640,7 +611,11 @@ app.post('/admin/semester-action', (req, res) => {
 
             let enrollmentsData = [];
             plans.forEach(plan => {
-                let courses = parseJsonSafe(plan.selected_courses_json);
+                let courses = [];
+                try { 
+                    const parsed = typeof plan.selected_courses_json === 'string' ? JSON.parse(plan.selected_courses_json) : plan.selected_courses_json;
+                    courses = Array.isArray(parsed) ? parsed : (parsed.courses || []);
+                } catch(e) {}
                 courses.forEach(c => {
                     enrollmentsData.push([plan.student_id, c.selected_section_id || null, c.course_id, semester_id, plan.year_number, 'undergoing', c.placeholder_id || null]);
                 });
@@ -648,14 +623,17 @@ app.post('/admin/semester-action', (req, res) => {
 
             const finalizeClose = () => {
                 db.query('DELETE FROM build_semester WHERE semester_id = ?', [semester_id], () => {
+                    // ✨ ONLY CLOSE REGISTRATION. Do NOT complete the semester yet! ✨
                     db.query('UPDATE semesters SET is_registration_open = 0 WHERE semester_id = ?', [semester_id], (err) => {
                         if (err) return res.status(500).json({error: err.message});
                         
-                        // ✨ INFINITE LOOP: IMMEDIATELY CREATE NEXT YEAR'S EQUIVALENT SEMESTER ✨
+                        // ✨ CREATE THE NEXT YEAR'S EQUIVALENT SEMESTER ✨
                         db.query('SELECT rule_id FROM semesters WHERE semester_id = ?', [semester_id], (err, rules) => {
-                            const rule_id = rules.length > 0 ? rules[0].rule_id : 1;
-                            const nextName = generateNextSemesterName(semester_name);
-                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, rule_id], (err) => {
+                            const currentRule = rules.length > 0 ? rules[0].rule_id : 1;
+                            const nextRule = (currentRule % 3) + 1; 
+                            
+                            const nextName = generateNextSemesterName(semester_name, nextRule);
+                            db.query('INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES (?, ?, FALSE, NULL, FALSE)', [nextName, nextRule], (err) => {
                                 if (err) return res.status(500).json({error: err.message});
                                 res.json({success: true});
                             });
@@ -676,6 +654,46 @@ app.post('/admin/semester-action', (req, res) => {
     }
 });
 
+app.post('/admin/finalize-grades', (req, res) => {
+    db.query("SELECT enrollment_id FROM enrollments WHERE status = 'undergoing'", (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (results.length === 0) return advanceSemester();
+
+        let completed = 0;
+        let hasError = false;
+
+        results.forEach(row => {
+            const randomGrade = Math.floor(Math.random() * (100 - 60 + 1)) + 60;
+            
+            db.query("UPDATE enrollments SET status = 'completed', grade = ? WHERE enrollment_id = ?", [randomGrade, row.enrollment_id], (err) => {
+                if (err && !hasError) {
+                    hasError = true;
+                    return res.status(500).json({ error: err.message });
+                }
+                completed++;
+                if (completed === results.length && !hasError) {
+                    advanceSemester();
+                }
+            });
+        });
+    });
+
+    function advanceSemester() {
+        db.query('SELECT semester_id FROM semesters WHERE is_completed = FALSE AND registration_close_date IS NOT NULL ORDER BY semester_id ASC LIMIT 1', (err, semResult) => {
+            if (err || semResult.length === 0) return res.json({ success: true, message: "Grades published!" });
+            
+            const currentSemId = semResult[0].semester_id;
+
+            db.query('UPDATE semesters SET is_completed = TRUE WHERE semester_id = ?', [currentSemId], () => {
+                db.query('UPDATE students SET current_semester_index = current_semester_index + 1 WHERE is_graduated = FALSE', () => {
+                    res.json({ success: true, message: "Grades published and semester completed!" });
+                });
+            });
+        });
+    }
+});
+
 app.post('/admin/sections', (req, res) => {
     const { course_id, section_name, professor_name, days, start_time, end_time, room_number, max_capacity } = req.body;
 
@@ -683,7 +701,7 @@ app.post('/admin/sections', (req, res) => {
         return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const sqlSem = `SELECT semester_id FROM semesters ORDER BY is_registration_open DESC, semester_id DESC LIMIT 1`;
+    const sqlSem = `SELECT semester_id FROM semesters WHERE is_completed = 0 ORDER BY is_registration_open DESC, (registration_close_date IS NOT NULL) DESC, CASE WHEN registration_close_date IS NOT NULL THEN semester_id END DESC, semester_id ASC LIMIT 1`;
 
     db.query(sqlSem, (err, semResult) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -706,6 +724,70 @@ app.post('/admin/sections', (req, res) => {
         db.query(sql, [course_id, semester_id, section_name, professor_id, days, start_time, end_time, room_number, max_capacity], (err, result) => {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ success: true, section_id: result.insertId });
+        });
+    });
+});
+
+app.get('/admin/sections', (req, res) => {
+    // ✨ Target the currently actionable semester (Open OR Most recently closed before finalize) ✨
+    const sqlSem = `
+        SELECT semester_id FROM semesters 
+        WHERE is_completed = 0 
+        ORDER BY is_registration_open DESC, (registration_close_date IS NOT NULL) DESC, CASE WHEN registration_close_date IS NOT NULL THEN semester_id END DESC, semester_id ASC 
+        LIMIT 1
+    `;
+
+    db.query(sqlSem, (err, semResult) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (semResult.length === 0) return res.json([]);
+
+        const targetSemesterId = semResult[0].semester_id;
+
+        const sql = `
+            SELECT 
+                s.section_id, 
+                c.course_prefix, 
+                c.course_number, 
+                c.course_name, 
+                s.section_name, 
+                s.max_capacity,
+                (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.section_id AND e.status = 'undergoing') as enrolled_count
+            FROM sections s
+            JOIN courses c ON s.course_id = c.course_id
+            WHERE s.semester_id = ?
+            ORDER BY c.course_prefix, c.course_number, s.section_name
+        `;
+
+        db.query(sql, [targetSemesterId], (err, sections) => {
+            if (err) return res.status(500).json({ error: err.message });
+
+            db.query('SELECT selected_courses_json FROM build_semester WHERE semester_id = ?', [targetSemesterId], (err, drafts) => {
+                if (err) return res.status(500).json({ error: err.message });
+
+                let draftCounts = {};
+                drafts.forEach(draft => {
+                    let courses = [];
+                    try { 
+                        const parsed = typeof draft.selected_courses_json === 'string' ? JSON.parse(draft.selected_courses_json) : draft.selected_courses_json; 
+                        courses = Array.isArray(parsed) ? parsed : (parsed.courses || []);
+                    } catch (e) { courses = []; }
+                    courses.forEach(c => {
+                        if (c.selected_section_id) {
+                            draftCounts[c.selected_section_id] = (draftCounts[c.selected_section_id] || 0) + 1;
+                        }
+                    });
+                });
+
+                const finalSections = sections.map(sec => {
+                    const drafted = draftCounts[sec.section_id] || 0;
+                    return {
+                        ...sec,
+                        enrolled_count: sec.enrolled_count + drafted
+                    };
+                });
+
+                res.json(finalSections);
+            });
         });
     });
 });
@@ -736,46 +818,6 @@ app.get('/admin/plans', (req, res) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
     });
-});
-
-app.post('/admin/finalize-grades', (req, res) => {
-    db.query("SELECT enrollment_id FROM enrollments WHERE status = 'undergoing'", (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        
-        if (results.length === 0) return advanceSemester();
-
-        let completed = 0;
-        let hasError = false;
-
-        results.forEach(row => {
-            const randomGrade = Math.floor(Math.random() * (100 - 60 + 1)) + 60;
-            db.query("UPDATE enrollments SET status = 'completed', grade = ? WHERE enrollment_id = ?", [randomGrade, row.enrollment_id], (err) => {
-                if (err && !hasError) {
-                    hasError = true;
-                    return res.status(500).json({ error: err.message });
-                }
-                completed++;
-                if (completed === results.length && !hasError) {
-                    advanceSemester();
-                }
-            });
-        });
-    });
-
-    function advanceSemester() {
-        // Find the oldest closed, but not-yet-completed semester
-        db.query('SELECT semester_id FROM semesters WHERE is_completed = FALSE AND registration_close_date IS NOT NULL ORDER BY semester_id ASC LIMIT 1', (err, semResult) => {
-            if (err || semResult.length === 0) return res.json({ success: true, message: "Grades published!" });
-            
-            const currentSemId = semResult[0].semester_id;
-
-            db.query('UPDATE semesters SET is_completed = TRUE WHERE semester_id = ?', [currentSemId], () => {
-                db.query('UPDATE students SET current_semester_index = current_semester_index + 1 WHERE is_graduated = FALSE', () => {
-                    res.json({ success: true, message: "Grades published and semester completed!" });
-                });
-            });
-        });
-    }
 });
 
 // ==========================================
@@ -895,6 +937,9 @@ app.get('/api/recommendations/:user_id', (req, res) => {
     });
 });
 
+// ==========================================
+// LIVE COURSE AVERAGES ENGINE
+// ==========================================
 app.get('/api/course-stats', (req, res) => {
     const sql = `
         SELECT 

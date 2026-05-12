@@ -153,7 +153,7 @@ TIMESLOTS = [
     ("Mon-Wed", "13:00:00", "14:15:00")
 ]
 
-# ✨ THE FIX: We stop exactly at Semester 15, leaving 16 completely empty for the Node server ✨
+# ✨ THE FIX: We stop generating pre-made sections at Semester 15! ✨
 for sem in range(1, 16): 
     for cid in PERFECT_PLAN:
         section_lookup[(cid, sem)] = []
@@ -192,7 +192,6 @@ def simulate_semesters(target_start_sem, pacing):
             continue
         elif sem == 3: continue
             
-        # --- STRICT SUMMER TRAINING RULE ---
         if is_summer and 38 not in completed and is_credit_unlocked(38, completed):
             allocations.append({
                 'cid': 38, 
@@ -203,7 +202,6 @@ def simulate_semesters(target_start_sem, pacing):
             })
             completed.add(38)
             continue 
-        # ----------------------------------------
         
         if is_summer:
             if pacing == "ahead": target_min, target_max = 3, 9
@@ -440,6 +438,7 @@ INSERT INTO prerequisites (course_id, prereq_id) VALUES
 INSERT INTO semester_rules (semester_type, max_credits, min_credits) VALUES
 ('1', 20, 10), ('2', 20, 10), ('Summer', 9, 0);    
 
+-- ✨ THE FIX: We ONLY create up to Semester 16! This prevents future ghost sections from colliding with the dynamic server logic ✨
 INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES 
 ('First Semester 2021-2022', 1, FALSE, '2021-09-09', TRUE),
 ('Second Semester 2021-2022', 2, FALSE, '2022-01-20', TRUE),
@@ -456,9 +455,7 @@ INSERT INTO semesters (semester_name, rule_id, is_registration_open, registratio
 ('First Semester 2025-2026', 1, FALSE, '2025-09-04', TRUE),
 ('Second Semester 2025-2026', 2, FALSE, '2026-01-15', TRUE),
 ('Summer Semester 2026', 3, FALSE, '2026-06-10', TRUE),
-('First Semester 2026-2027', 1, FALSE, NULL, FALSE), 
-('Second Semester 2026-2027', 2, FALSE, NULL, FALSE),
-('Summer Semester 2027', 3, FALSE, NULL, FALSE);
+('First Semester 2026-2027', 1, FALSE, NULL, FALSE);
 
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) VALUES 
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'BIO' AND course_number = '110'), 1, '1', 'core'),
