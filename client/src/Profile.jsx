@@ -5,6 +5,7 @@ function Profile({ user }) {
   const [grades, setGrades] = useState([]);
   const [draftPlan, setDraftPlan] = useState(null);
   const [major, setMajor] = useState('');
+  const [totalProgramCredits, setTotalProgramCredits] = useState(140); // ✨ NEW STATE ✨
   
   const [supervisorInfo, setSupervisorInfo] = useState(null);
   
@@ -55,6 +56,8 @@ function Profile({ user }) {
 
   useEffect(() => {
     if (user && user.user_id) {
+      
+      // 1. Fetch the actual transcript grades! (This was accidentally deleted)
       fetch(`http://localhost:5000/my-grades/${user.user_id}`)
         .then(res => res.json())
         .then(data => {
@@ -63,10 +66,14 @@ function Profile({ user }) {
         })
         .catch(err => { console.error("Grades error:", err); setGrades([]); });
 
+      // 2. Fetch the Major and Total Credits
       fetch(`http://localhost:5000/my-major/${user.user_id}`)
         .then(res => res.json())
         .then(data => {
-            if (data && data.major) setMajor(data.major);
+            if (data && data.major) {
+                setMajor(data.major);
+                setTotalProgramCredits(data.total_credits);
+            }
         })
         .catch(err => console.error("Major fetch error:", err));
 
@@ -303,7 +310,7 @@ function Profile({ user }) {
 
             <div style={{ textAlign: 'left', paddingRight: '50px' }}>
               <h3 className="fw-bold m-0" style={{ color: '#104929' }}>
-                Credits Completed: {totalCreditsDone}
+                Credits Completed: {totalCreditsDone} <span className="text-muted ms-1" style={{fontSize: '0.8em'}}>/ {totalProgramCredits}</span>
               </h3>
             </div>
             

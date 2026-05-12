@@ -43,10 +43,8 @@ function Plan({ user }) {
     const [activeElectiveCourse, setActiveElectiveCourse] = useState(null);
     const [previewSectionId, setPreviewSectionId] = useState(null);
 
-    // Checkbox States for Rankings Filter
-    const [showCore, setShowCore] = useState(true);
-    const [showElective, setShowElective] = useState(false);
-    const [showFree, setShowFree] = useState(false);
+    // Single-select State for Rankings Filter
+    const [activeFilter, setActiveFilter] = useState('core');
 
     // --- CRITICAL DASHBOARD VARIABLES ---
     const totalProgramCredits = 140;
@@ -148,6 +146,7 @@ function Plan({ user }) {
     const minCredits = isSummer ? 0 : 10;
     const maxCredits = isSummer ? 9 : 20;
     const isInvalidLoad = totalCredits < minCredits || totalCredits > maxCredits;
+    const isAILocked = isInvalidLoad || selectedCourses.length === 0; // ✨ NEW: AI specifically requires at least 1 course! ✨
 
     const currentGPA = (() => {
         let totalPoints = 0, totalCr = 0;
@@ -348,6 +347,25 @@ function Plan({ user }) {
         return (paceScore * wPace) + (offScore * wOff) + (diffScore * wDiff);
     };
 
+    // Moved up so the filter can use them!
+    const checkPrereqsMet = (courseId) => {
+        const reqsForThisCourse = prerequisites.filter(p => p.course_id === courseId);
+        for (let req of reqsForThisCourse) {
+            const prereqCourse = curriculum.find(c => c.course_id === req.prereq_id);
+            if (!prereqCourse || prereqCourse.status !== 'completed') return false;
+        }
+        return true;
+    };
+
+    const checkCreditRequirements = (course) => {
+        if (!course) return true;
+        const prefix = (course.course_prefix || '').toUpperCase();
+        const number = (course.course_number || '');
+        if (prefix === 'CPIS' && number === '323') return totalCompletedCredits >= 80;
+        if (prefix === 'CPIS' && number === '498') return totalCompletedCredits >= 100;
+        return true;
+    };
+
     const isPlaceholder = (c) => {
         if (!c) return false;
         const prefix = (c.course_prefix || c.prefix || '').toUpperCase();
@@ -357,16 +375,34 @@ function Plan({ user }) {
 
     const filteredRecommendations = recommendations.filter(rec => {
         if (isPlaceholder(rec)) return false;
-        const isCore = curriculum.some(core => core.course_id === rec.id && !isPlaceholder(core));
+
+        // ✨ FIX 1: Check if the user already took this specific course as an elective/free course! ✨
+        const alreadyTaken = curriculum.some(c => 
+            (c.status === 'completed' || c.status === 'undergoing') && 
+            (c.course_id === rec.id || c.placeholder_id === rec.id)
+        );
+        if (alreadyTaken) return false;
+
+        // Extract full course data early
+        const fullData = curriculum.find(c => c.course_id === rec.id) ||
+            allCourses.find(c => c.course_id === rec.id) ||
+            { ...rec, course_id: rec.id, course_prefix: rec.prefix, course_number: rec.number, course_name: rec.name };
+
+        // Instantly hide courses if prerequisites or credit limits (like Summer Training) aren't met! 
+        if (!checkPrereqsMet(rec.id) || !checkCreditRequirements(fullData)) {
+            return false; 
+        }
+
+        // ✨ FIX 2: Ensure we don't accidentally tag filled placeholders as "Core" courses ✨
+        const isCore = curriculum.some(core => core.course_id === rec.id && !core.historical_placeholder_name && !isPlaceholder(core));
         const prefix = (rec.prefix || '').toUpperCase();
+        
         let courseType = 'free';
         if (isCore) courseType = 'core';
         else if (prefix === 'CPIS') courseType = 'elective';
 
-        if (courseType === 'core' && showCore) return true;
-        if (courseType === 'elective' && showElective) return true;
-        if (courseType === 'free' && showFree) return true;
-        return false;
+        // Only return the course if it matches the single active filter
+        return courseType === activeFilter;
     }).map(rec => {
         const fullData = curriculum.find(c => c.course_id === rec.id) ||
             allCourses.find(c => c.course_id === rec.id) ||
@@ -451,23 +487,7 @@ function Plan({ user }) {
             });
     };
 
-    const checkPrereqsMet = (courseId) => {
-        const reqsForThisCourse = prerequisites.filter(p => p.course_id === courseId);
-        for (let req of reqsForThisCourse) {
-            const prereqCourse = curriculum.find(c => c.course_id === req.prereq_id);
-            if (!prereqCourse || prereqCourse.status !== 'completed') return false;
-        }
-        return true;
-    };
-
-    const checkCreditRequirements = (course) => {
-        if (!course) return true;
-        const prefix = (course.course_prefix || '').toUpperCase();
-        const number = (course.course_number || '');
-        if (prefix === 'CPIS' && number === '323') return totalCompletedCredits >= 80;
-        if (prefix === 'CPIS' && number === '498') return totalCompletedCredits >= 100;
-        return true;
-    };
+    
 
     const hasTimeConflict = (sec1, sec2) => {
         const days1 = sec1.days.split('-');
@@ -661,7 +681,7 @@ function Plan({ user }) {
 
     const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'];
     const HOURS = Array.from({ length: 17 }, (_, i) => i + 7);
-    const ROW_HEIGHT = 50;
+    const ROW_HEIGHT = 75;
 
     const getTopOffset = (timeStr) => {
         const [h, m] = timeStr.split(':').map(Number);
@@ -674,9 +694,31 @@ function Plan({ user }) {
         return ((eh + em / 60) - (sh + sm / 60)) * ROW_HEIGHT;
     };
 
-    const getColorForCourse = (id) => {
-        const colors = ['#4f46e5', '#0284c7', '#0891b2', '#0d9488', '#059669', '#16a34a', '#65a30d', '#ca8a04', '#d97706', '#ea580c', '#dc2626', '#e11d48', '#db2777', '#c026d3', '#9333ea'];
-        return colors[(id || 0) % colors.length];
+    const getColorForCourse = (courseId) => {
+        // 10 distinct, beautiful colors that look great with white text!
+        const colors = [
+            '#4f46e5', // Deep Indigo
+            '#d97706', // Rich Amber
+            '#059669', // Emerald Green
+            '#db2777', // Vibrant Pink
+            '#0284c7', // Ocean Blue
+            '#dc2626', // Crimson Red
+            '#7c3aed', // Royal Purple
+            '#0d9488', // Teal
+            '#ca8a04', // Dark Gold
+            '#c026d3'  // Fuchsia
+        ];
+
+        // Find the index of this exact course in the student's selected draft
+        let index = selectedCourses.findIndex(c => c.course_id === courseId);
+        
+        // If it's a new course they are just previewing/hovering over, give it the next available color!
+        if (index === -1) {
+            index = selectedCourses.length;
+        }
+
+        // Guarantee a unique color for up to 10 courses
+        return colors[index % colors.length];
     };
 
     const renderScheduleGrid = (sectionsToDraw) => (
@@ -846,6 +888,9 @@ function Plan({ user }) {
         .dashboard-locked { background: linear-gradient(135deg, #104929 0%, #0a2e1a 100%); color: white; position: relative; overflow: hidden; }
         .dashboard-locked::after { content: ''; position: absolute; top: 0; left: -100%; width: 50%; height: 100%; background: linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent); transform: skewX(-25deg); animation: shine 3s infinite; }
         @keyframes shine { 0% { left: -100%; } 100% { left: 200%; } }
+        /* NEW: Hover effect for the Mode Selection Button */
+        .mode-select-btn { transition: all 0.2s ease; cursor: pointer; }
+        .mode-select-btn:hover { filter: brightness(0.92); transform: translateY(-2px); }
       `}</style>
 
             <div className="container p-0">
@@ -882,7 +927,7 @@ function Plan({ user }) {
 
                             {/* STRATEGY SELECTION BUTTON */}
                             <button
-                                className="btn w-100 mb-3 fw-bold shadow-sm d-flex justify-content-center align-items-center px-3 py-2 position-relative"
+                                className="btn w-100 mb-3 fw-bold shadow-sm d-flex justify-content-center align-items-center px-3 py-2 position-relative mode-select-btn"
                                 style={{ backgroundColor: '#f8f9fa', border: `2px solid ${strategyDetails[activeStrategy].borderColor}` }}
                                 onClick={() => setShowStrategyModal(true)}
                             >
@@ -893,19 +938,29 @@ function Plan({ user }) {
                                 <i className="bi bi-gear-fill text-muted position-absolute" style={{ right: '15px' }}></i>
                             </button>
 
-                            <div className="d-flex justify-content-between align-items-center mb-3 px-2 small bg-light rounded p-2 border">
-                                <div className="form-check form-switch mb-0">
-                                    <input className="form-check-input" type="checkbox" id="checkCore" checked={showCore} onChange={(e) => setShowCore(e.target.checked)} style={{ cursor: 'pointer' }} />
-                                    <label className="form-check-label fw-bold" htmlFor="checkCore" style={{ cursor: 'pointer', color: '#104929' }}>Core</label>
-                                </div>
-                                <div className="form-check form-switch mb-0">
-                                    <input className="form-check-input" type="checkbox" id="checkElec" checked={showElective} onChange={(e) => setShowElective(e.target.checked)} style={{ cursor: 'pointer' }} />
-                                    <label className="form-check-label fw-bold" htmlFor="checkElec" style={{ cursor: 'pointer', color: '#d97706' }}>Elective</label>
-                                </div>
-                                <div className="form-check form-switch mb-0">
-                                    <input className="form-check-input" type="checkbox" id="checkFree" checked={showFree} onChange={(e) => setShowFree(e.target.checked)} style={{ cursor: 'pointer' }} />
-                                    <label className="form-check-label fw-bold" htmlFor="checkFree" style={{ cursor: 'pointer', color: '#0284c7' }}>Free</label>
-                                </div>
+                            {/* ✨ NEW SINGLE-SELECT TABS ✨ */}
+                            <div className="d-flex gap-2 mb-3 bg-light rounded p-2 border justify-content-between">
+                                <button 
+                                    className={`btn btn-sm flex-grow-1 fw-bold rounded-pill transition-all ${activeFilter === 'core' ? 'btn-success text-white shadow-sm' : 'btn-outline-secondary border-0 text-dark'}`}
+                                    onClick={() => setActiveFilter('core')}
+                                    style={{ backgroundColor: activeFilter === 'core' ? '#104929' : 'transparent' }}
+                                >
+                                    Core
+                                </button>
+                                <button 
+                                    className={`btn btn-sm flex-grow-1 fw-bold rounded-pill transition-all ${activeFilter === 'elective' ? 'text-white shadow-sm' : 'btn-outline-secondary border-0 text-dark'}`}
+                                    onClick={() => setActiveFilter('elective')}
+                                    style={{ backgroundColor: activeFilter === 'elective' ? '#d97706' : 'transparent' }}
+                                >
+                                    Elective
+                                </button>
+                                <button 
+                                    className={`btn btn-sm flex-grow-1 fw-bold rounded-pill transition-all ${activeFilter === 'free' ? 'text-white shadow-sm' : 'btn-outline-secondary border-0 text-dark'}`}
+                                    onClick={() => setActiveFilter('free')}
+                                    style={{ backgroundColor: activeFilter === 'free' ? '#0284c7' : 'transparent' }}
+                                >
+                                    Free
+                                </button>
                             </div>
 
                             <div className="fw-bold text-center mb-3 p-2 rounded-pill w-100" style={{ fontSize: '0.7rem', color: '#104929', backgroundColor: '#eef6f1', border: '1px solid #10492922', flexShrink: 0 }}>▲ MOST RECOMMENDED</div>
@@ -1057,14 +1112,27 @@ function Plan({ user }) {
                 {/* NEW AI MISSION CONTROL DASHBOARD           */}
                 {/* ========================================== */}
                 <div className="mt-4 pt-2 mb-5">
-                    {isInvalidLoad ? (
+                    {isAILocked ? (
                         // LOCKED GAMIFIED STATE
                         <div className="p-5 rounded-4 shadow-lg dashboard-locked text-center border">
                             <i className="bi bi-lock-fill mb-3 d-block" style={{ fontSize: '3.5rem', opacity: 0.8 }}></i>
                             <h2 className="fw-bold mb-3">AI Prediction Engine Standby</h2>
                             <p className="lead m-0 opacity-75">
-                                You need to hit the minimum credit requirement <strong className="text-white">({minCredits} credits)</strong> for the AI to activate. <br />
-                                Add more courses to your schedule to unlock your future!
+                                {selectedCourses.length === 0 ? (
+                                    <>
+                                        Add at least one course to your schedule to activate the AI Prediction Engine!
+                                    </>
+                                ) : totalCredits < minCredits ? (
+                                    <>
+                                        You need to hit the minimum credit requirement <strong className="text-white">({minCredits} credits)</strong> for the AI to activate. <br />
+                                        Add more courses to your schedule to unlock your future!
+                                    </>
+                                ) : (
+                                    <>
+                                        You have exceeded the maximum credit limit <strong className="text-white">({maxCredits} credits)</strong> for this semester. <br />
+                                        Remove some courses from your schedule to reactivate the AI!
+                                    </>
+                                )}
                             </p>
                         </div>
                     ) : (
@@ -1077,7 +1145,7 @@ function Plan({ user }) {
                             )}
 
                             <div className="d-flex justify-content-between align-items-center border-bottom pb-3 mb-4">
-                                <h4 className="fw-bold m-0" style={{ color: '#104929' }}><i className="bi bi-cpu-fill me-2"></i>E-Advisor AI Predictions</h4>
+                                <h4 className="fw-bold m-0" style={{ color: '#104929' }}><i className="bi bi-cpu-fill me-2"></i>E-Advisor Dashboard</h4>
                                 <span className="badge bg-success text-white px-3 py-2 rounded-pill"><i className="bi bi-check-circle-fill me-2"></i>Engine Active</span>
                             </div>
 
@@ -1154,11 +1222,11 @@ function Plan({ user }) {
                 {/* ========================================== */}
                 {/* NATIVE REACT BAR CHART                     */}
                 {/* ========================================== */}
-                {!isInvalidLoad && gpaHistoryData.length > 0 && (
+                {!isAILocked && gpaHistoryData.length > 0 && (
                     <div className="p-4 rounded-4 shadow-sm border bg-white mb-5">
                         <div className="d-flex justify-content-between align-items-center mb-4">
                             <h5 className="fw-bold m-0" style={{ color: '#104929' }}>
-                                <i className="bi bi-bar-chart-fill me-2"></i>Semester GPA Progression
+                                <i className="bi bi-bar-chart-fill me-2"></i>GPA Progression
                             </h5>
                         </div>
 

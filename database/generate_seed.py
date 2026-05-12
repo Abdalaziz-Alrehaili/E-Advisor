@@ -153,7 +153,8 @@ TIMESLOTS = [
     ("Mon-Wed", "13:00:00", "14:15:00")
 ]
 
-for sem in range(1, 18): 
+# ✨ THE FIX: We stop exactly at Semester 15, leaving 16 completely empty for the Node server ✨
+for sem in range(1, 16): 
     for cid in PERFECT_PLAN:
         section_lookup[(cid, sem)] = []
         chosen_slots = random.sample(TIMESLOTS, 2)
@@ -308,7 +309,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 INSERT INTO faculties (faculty_name) VALUES 
 ('Faculty of Computing and Information Technology'),
-('Faculty of Science'),                              
+('Faculty of Science'),                                      
 ('Faculty of Economics and Administration'),         
 ('Faculty of Communication and Media'),              
 ('English Language Institute'),                      
