@@ -153,7 +153,8 @@ TIMESLOTS = [
     ("Mon-Wed", "13:00:00", "14:15:00")
 ]
 
-for sem in range(1, 18): 
+# ✨ THE FIX: We stop generating pre-made sections at Semester 15! ✨
+for sem in range(1, 16): 
     for cid in PERFECT_PLAN:
         section_lookup[(cid, sem)] = []
         chosen_slots = random.sample(TIMESLOTS, 2)
@@ -191,8 +192,6 @@ def simulate_semesters(target_start_sem, pacing):
             continue
         elif sem == 3: continue
             
-        # --- NEW STRICT SUMMER TRAINING RULE ---
-        # If it's Summer, and Course 38 (CPIS-323) is unlocked (100+ credits), TAKE IT ALONE!
         if is_summer and 38 not in completed and is_credit_unlocked(38, completed):
             allocations.append({
                 'cid': 38, 
@@ -202,8 +201,7 @@ def simulate_semesters(target_start_sem, pacing):
                 'sem_load': 0
             })
             completed.add(38)
-            continue # This instantly ends the semester loop, guaranteeing it's taken alone!
-        # ----------------------------------------
+            continue 
         
         if is_summer:
             if pacing == "ahead": target_min, target_max = 3, 9
@@ -222,7 +220,6 @@ def simulate_semesters(target_start_sem, pacing):
         cur_creds = 0
         sem_courses = []
         
-        # FIX: Explicitly exclude 38 from the normal core pool so it NEVER gets taken in a standard Fall/Spring semester
         eligible_core = [c for c in CORE_MAJOR_COURSES if c != 38 and c not in completed and all(pr in completed for pr in PREREQS.get(c, [])) and is_credit_unlocked(c, completed)]
         for cid in eligible_core:
             c_cred = CREDITS.get(cid, 3)
@@ -310,7 +307,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 INSERT INTO faculties (faculty_name) VALUES 
 ('Faculty of Computing and Information Technology'),
-('Faculty of Science'),                              
+('Faculty of Science'),                                      
 ('Faculty of Economics and Administration'),         
 ('Faculty of Communication and Media'),              
 ('English Language Institute'),                      
@@ -441,6 +438,7 @@ INSERT INTO prerequisites (course_id, prereq_id) VALUES
 INSERT INTO semester_rules (semester_type, max_credits, min_credits) VALUES
 ('1', 20, 10), ('2', 20, 10), ('Summer', 9, 0);    
 
+-- ✨ THE FIX: We ONLY create up to Semester 16! This prevents future ghost sections from colliding with the dynamic server logic ✨
 INSERT INTO semesters (semester_name, rule_id, is_registration_open, registration_close_date, is_completed) VALUES 
 ('First Semester 2021-2022', 1, FALSE, '2021-09-09', TRUE),
 ('Second Semester 2021-2022', 2, FALSE, '2022-01-20', TRUE),
@@ -457,9 +455,7 @@ INSERT INTO semesters (semester_name, rule_id, is_registration_open, registratio
 ('First Semester 2025-2026', 1, FALSE, '2025-09-04', TRUE),
 ('Second Semester 2025-2026', 2, FALSE, '2026-01-15', TRUE),
 ('Summer Semester 2026', 3, FALSE, '2026-06-10', TRUE),
-('First Semester 2026-2027', 1, FALSE, NULL, FALSE), 
-('Second Semester 2026-2027', 2, FALSE, NULL, FALSE),
-('Summer Semester 2027', 3, FALSE, NULL, FALSE);
+('First Semester 2026-2027', 1, FALSE, NULL, FALSE);
 
 INSERT INTO program_requirements (program_id, course_id, ideal_year, ideal_semester, requirement_type) VALUES 
 (1, (SELECT course_id FROM courses WHERE course_prefix = 'BIO' AND course_number = '110'), 1, '1', 'core'),
@@ -567,20 +563,20 @@ VALUES (1, (SELECT course_id FROM courses WHERE course_prefix = 'ELEC' AND cours
         profs.append(f"({user_id}, 3, {is_sup}, {room})")
     f.write(",\n".join(profs) + ";\n\n")
 
-    f.write("INSERT INTO students (user_id, program_id, admission_year, supervisor_id, is_graduated) VALUES \n")
+    f.write("INSERT INTO students (user_id, program_id, admission_year, current_semester_index, supervisor_id, is_graduated) VALUES \n")
     students = []
     
-    students.append("(17, 1, 2024, 1, FALSE)")  
-    students.append("(18, 1, 2024, 2, FALSE)")  
-    students.append("(19, 1, 2023, 2, FALSE)")  
-    students.append("(20, 1, 2023, 1, FALSE)")  
-    students.append("(21, 1, 2022, 1, FALSE)")  
-    students.append("(22, 1, 2022, 2, FALSE)")  
+    students.append("(17, 1, 2024, 7, 1, FALSE)")  # Mustafa
+    students.append("(18, 1, 2024, 7, 2, FALSE)")  # Mohammed
+    students.append("(19, 1, 2023, 10, 2, FALSE)") # Tariq
+    students.append("(20, 1, 2023, 10, 1, FALSE)") # Youssef
+    students.append("(21, 1, 2022, 13, 1, FALSE)") # Hassan
+    students.append("(22, 1, 2022, 13, 2, FALSE)") # Ali
     
     for i in range(23, 23 + NUM_HISTORICAL_STUDENTS):
         sup_id = random.choice([1, 2]) 
         admit_year = random.randint(2018, 2021)
-        students.append(f"({i}, 1, {admit_year}, {sup_id}, TRUE)")
+        students.append(f"({i}, 1, {admit_year}, 15, {sup_id}, TRUE)")
     f.write(",\n".join(students) + ";\n\n")
 
     chunk_size = 300
